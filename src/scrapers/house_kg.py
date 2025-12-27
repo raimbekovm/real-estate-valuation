@@ -313,38 +313,38 @@ class HouseKGScraper:
         return data
 
     def get_total_pages(self):
-        """Определение общего количества страниц"""
-        try:
-            response = self.session.get(self.LISTING_URL, headers=self._get_headers(), timeout=30)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при определении количества страниц: {e}")
-            return 1
+        """Определение общего количества страниц через бинарный поиск"""
 
-        soup = BeautifulSoup(response.text, 'lxml')
+        def has_listings(page_num):
+            """Проверка наличия объявлений на странице"""
+            try:
+                url = f"{self.LISTING_URL}?page={page_num}"
+                response = self.session.get(url, headers=self._get_headers(), timeout=30)
+                soup = BeautifulSoup(response.text, 'lxml')
+                listings = soup.find_all('a', href=re.compile(r'/details/'))
+                return len(set(a['href'] for a in listings)) > 0
+            except:
+                return False
 
-        # Поиск пагинации
-        pagination = soup.find('nav', class_=re.compile(r'pagination', re.I))
-        if pagination:
-            page_links = pagination.find_all('a', href=True)
-            max_page = 1
-            for link in page_links:
-                match = re.search(r'page=(\d+)', link['href'])
-                if match:
-                    page_num = int(match.group(1))
-                    max_page = max(max_page, page_num)
-            return max_page
+        # Бинарный поиск последней страницы (между 1 и 600)
+        low, high = 1, 600
 
-        # Альтернативный поиск
-        all_links = soup.find_all('a', href=re.compile(r'page=\d+'))
-        max_page = 1
-        for link in all_links:
-            match = re.search(r'page=(\d+)', link['href'])
-            if match:
-                page_num = int(match.group(1))
-                max_page = max(max_page, page_num)
+        # Сначала проверим верхнюю границу
+        if has_listings(high):
+            logger.info(f"Найдено более {high} страниц")
+            return high
 
-        return max_page if max_page > 1 else 100  # default fallback
+        # Бинарный поиск
+        while high - low > 1:
+            mid = (low + high) // 2
+            if has_listings(mid):
+                low = mid
+            else:
+                high = mid
+            time.sleep(0.5)  # Небольшая задержка
+
+        logger.info(f"Найдено страниц: {low}")
+        return low
 
     def scrape(self, max_pages=None, save_every=50):
         """
