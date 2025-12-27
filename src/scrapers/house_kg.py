@@ -125,6 +125,102 @@ class HouseKGScraper:
         logger.info(f"Страница {page}: найдено {len(urls)} объявлений")
         return urls
 
+    def _parse_info_rows(self, soup, data):
+        """Парсинг всех info-row элементов (автоматически)"""
+        info_rows = soup.find_all(class_='info-row')
+        for row in info_rows:
+            children = [c for c in row.children if str(c).strip()]
+            if len(children) >= 2:
+                label = children[0].get_text(strip=True).lower() if hasattr(children[0], 'get_text') else ''
+                value = children[1].get_text(strip=True) if hasattr(children[1], 'get_text') else ''
+            else:
+                continue
+
+            # Специальная обработка для полей с числами
+            if label == 'этаж':
+                floor_match = re.search(r'(\d+)\s*этаж\s*из\s*(\d+)', value)
+                if floor_match:
+                    data['floor'] = int(floor_match.group(1))
+                    data['total_floors'] = int(floor_match.group(2))
+
+            elif label == 'площадь':
+                if 'area' not in data:
+                    area_match = re.search(r'^([\d.,]+)\s*м', value)
+                    if area_match:
+                        data['area'] = float(area_match.group(1).replace(',', '.'))
+                living_match = re.search(r'жилая[:\s]*([\d.,]+)', value)
+                if living_match:
+                    data['living_area'] = float(living_match.group(1).replace(',', '.'))
+                kitchen_match = re.search(r'кухня[:\s]*([\d.,]+)', value)
+                if kitchen_match:
+                    data['kitchen_area'] = float(kitchen_match.group(1).replace(',', '.'))
+
+            elif label == 'дом':
+                for house_type in ['кирпич', 'панель', 'монолит', 'блочн']:
+                    if house_type in value.lower():
+                        data['house_type'] = house_type
+                        break
+                year_match = re.search(r'(\d{4})', value)
+                if year_match:
+                    data['year_built'] = int(year_match.group(1))
+
+            elif label == 'высота потолков':
+                height_match = re.search(r'([\d.,]+)', value)
+                if height_match:
+                    data['ceiling_height'] = float(height_match.group(1).replace(',', '.'))
+
+            else:
+                # Автоматическое добавление всех остальных полей
+                col_name = self._label_to_column(label)
+                if col_name and value:
+                    clean_value = ' '.join(value.split())
+                    data[col_name] = clean_value
+
+    def _label_to_column(self, label):
+        """Преобразование русского label в имя колонки"""
+        # Маппинг русских названий в английские snake_case
+        label_map = {
+            'тип предложения': 'offer_type',
+            'серия': 'building_series',
+            'состояние': 'condition',
+            'отопление': 'heating',
+            'санузел': 'bathroom',
+            'балкон': 'balcony',
+            'мебель': 'furniture',
+            'интернет': 'internet',
+            'парковка': 'parking',
+            'газ': 'gas',
+            'пол': 'floor_type',
+            'входная дверь': 'entrance_door',
+            'телефон': 'has_phone',
+            'безопасность': 'security',
+            'разное': 'amenities',
+            'правоустанавливающие документы': 'documents',
+            'возможность рассрочки': 'installment',
+            'возможность ипотеки': 'mortgage',
+            'количество комнат': 'rooms_info',
+            'комнаты': 'rooms_info',
+            'окна': 'windows',
+            'лифт': 'elevator',
+            'охрана': 'security',
+            'ремонт': 'renovation',
+            'канализация': 'sewage',
+            'вода': 'water',
+            'электричество': 'electricity',
+            'возможность обмена': 'exchange_possible',
+        }
+
+        if label in label_map:
+            return label_map[label]
+
+        # Если нет в маппинге - создаём колонку с префиксом raw_
+        # чтобы потом можно было обработать
+        if label and len(label) < 50:  # защита от мусора
+            # Транслитерация или просто raw_
+            return f'raw_{label.replace(" ", "_").replace("-", "_")[:30]}'
+
+        return None
+
     def parse_listing(self, url):
         """Парсинг детальной страницы объявления"""
         try:
@@ -141,29 +237,23 @@ class HouseKGScraper:
         header = soup.find(class_='details-header')
         if header:
             header_text = header.get_text(strip=True)
-
-            # Комнаты
             rooms_match = re.search(r'(\d+)-комн', header_text)
             if rooms_match:
                 data['rooms'] = int(rooms_match.group(1))
-
-            # Площадь
             area_match = re.search(r'([\d.,]+)\s*м[²2]', header_text)
             if area_match:
                 data['area'] = float(area_match.group(1).replace(',', '.'))
 
-        # Цена - ищем элемент с классом price-dollar
+        # Цена
         price_elem = soup.find(class_='price-dollar')
         if price_elem:
             price_text = price_elem.get_text(strip=True)
-            # Убираем $ и пробелы, извлекаем число
             price_match = re.search(r'([\d\s]+)', price_text)
             if price_match:
                 price_str = price_match.group(1).replace(' ', '')
-                if price_str.isdigit() and len(price_str) >= 4:  # минимум 4 цифры для цены
+                if price_str.isdigit() and len(price_str) >= 4:
                     data['price_usd'] = int(price_str)
 
-        # Цена за м² - второй элемент с классом price-dollar содержит /м2
         price_elems = soup.find_all(class_='price-dollar')
         for elem in price_elems:
             text = elem.get_text(strip=True)
@@ -173,128 +263,8 @@ class HouseKGScraper:
                     data['price_per_m2'] = int(price_per_m2_match.group(1).replace(' ', ''))
                 break
 
-        # Парсинг info-row элементов (label -> value)
-        info_rows = soup.find_all(class_='info-row')
-        for row in info_rows:
-            children = [c for c in row.children if str(c).strip()]
-            if len(children) >= 2:
-                label = children[0].get_text(strip=True).lower() if hasattr(children[0], 'get_text') else ''
-                value = children[1].get_text(strip=True) if hasattr(children[1], 'get_text') else ''
-            else:
-                continue
-
-            # Этаж: "4 этаж из 4"
-            if label == 'этаж':
-                floor_match = re.search(r'(\d+)\s*этаж\s*из\s*(\d+)', value)
-                if floor_match:
-                    data['floor'] = int(floor_match.group(1))
-                    data['total_floors'] = int(floor_match.group(2))
-
-            # Площадь: "90.8 м2, жилая: 90 м2, кухня: 30 м2"
-            elif label == 'площадь':
-                # Общая площадь
-                if 'area' not in data:
-                    area_match = re.search(r'^([\d.,]+)\s*м', value)
-                    if area_match:
-                        data['area'] = float(area_match.group(1).replace(',', '.'))
-                # Жилая
-                living_match = re.search(r'жилая[:\s]*([\d.,]+)', value)
-                if living_match:
-                    data['living_area'] = float(living_match.group(1).replace(',', '.'))
-                # Кухня
-                kitchen_match = re.search(r'кухня[:\s]*([\d.,]+)', value)
-                if kitchen_match:
-                    data['kitchen_area'] = float(kitchen_match.group(1).replace(',', '.'))
-
-            # Дом: "кирпичный, 2011 г."
-            elif label == 'дом':
-                # Тип дома
-                for house_type in ['кирпич', 'панель', 'монолит', 'блочн']:
-                    if house_type in value.lower():
-                        data['house_type'] = house_type
-                        break
-                # Год постройки
-                year_match = re.search(r'(\d{4})', value)
-                if year_match:
-                    data['year_built'] = int(year_match.group(1))
-
-            # Серия
-            elif label == 'серия':
-                data['building_series'] = value
-
-            # Состояние
-            elif label == 'состояние':
-                data['condition'] = value
-
-            # Отопление
-            elif label == 'отопление':
-                data['heating'] = value
-
-            # Санузел
-            elif label == 'санузел':
-                data['bathroom'] = value
-
-            # Тип предложения
-            elif label == 'тип предложения':
-                data['offer_type'] = value
-
-            # Балкон
-            elif label == 'балкон':
-                data['balcony'] = value
-
-            # Мебель
-            elif label == 'мебель':
-                data['furniture'] = value
-
-            # Интернет
-            elif label == 'интернет':
-                data['internet'] = value
-
-            # Парковка
-            elif label == 'парковка':
-                data['parking'] = value
-
-            # Высота потолков: "2.7 м."
-            elif label == 'высота потолков':
-                height_match = re.search(r'([\d.,]+)', value)
-                if height_match:
-                    data['ceiling_height'] = float(height_match.group(1).replace(',', '.'))
-
-            # Газ
-            elif label == 'газ':
-                data['gas'] = value
-
-            # Пол (тип покрытия)
-            elif label == 'пол':
-                data['floor_type'] = value
-
-            # Входная дверь
-            elif label == 'входная дверь':
-                data['entrance_door'] = value
-
-            # Телефон
-            elif label == 'телефон':
-                data['has_phone'] = value == 'есть'
-
-            # Безопасность
-            elif label == 'безопасность':
-                data['security'] = value
-
-            # Разное (дополнительные удобства)
-            elif label == 'разное':
-                data['amenities'] = value
-
-            # Документы
-            elif label == 'правоустанавливающие документы':
-                data['documents'] = value
-
-            # Рассрочка
-            elif label == 'возможность рассрочки':
-                data['installment'] = value != 'нет'
-
-            # Ипотека
-            elif label == 'возможность ипотеки':
-                data['mortgage'] = value != 'нет'
+        # Парсинг info-row (автоматически)
+        self._parse_info_rows(soup, data)
 
         # Адрес - ищем в details-header
         address_elem = soup.select_one('.details-header .address')

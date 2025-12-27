@@ -1,0 +1,363 @@
+ПЛАН
+подготовки научной статьи уровня Q3 на основе ВКР
+Раимбекова Мурата
+
+"Machine Learning for Property Valuation in Emerging Central Asian Markets:
+A Comparative Study of Gradient Boosting Methods on Small-Scale Real Estate Data"
+
+(Машинное обучение для оценки недвижимости на развивающихся рынках Центральной Азии:
+сравнительное исследование методов градиентного бустинга на малых объемах данных)
+________________
+
+
+RESEARCH QUESTION:
+Как методы градиентного бустинга, разработанные и валидированные на крупных западных рынках
+недвижимости, применимы к малым развивающимся рынкам Центральной Азии, и какие адаптации
+необходимы для достижения сопоставимой точности?
+
+________________
+
+
+НАУЧНАЯ НОВИЗНА (CONTRIBUTIONS):
+1. Первое систематическое исследование применимости современных ML-методов для оценки
+   недвижимости на рынках Центральной Азии (Кыргызстан, Казахстан).
+
+2. Эмпирический анализ влияния размера рынка и объема данных на эффективность
+   алгоритмов градиентного бустинга.
+
+3. Cross-market validation: исследование переносимости моделей между географически
+   и экономически близкими рынками.
+
+4. Публичный датасет недвижимости Кыргызстана для воспроизводимости исследований
+   и дальнейших работ.
+
+________________
+
+
+ГИПОТЕЗЫ ИССЛЕДОВАНИЯ:
+H1: Алгоритмы градиентного бустинга превосходят традиционные гедонистические модели
+    на развивающихся рынках недвижимости.
+
+H2: Эффективность ML-моделей существенно зависит от размера локального датасета,
+    с критическим порогом около 5000 наблюдений.
+
+H3: Модели, обученные на крупном региональном рынке (Казахстан), могут быть
+    адаптированы для малого рынка (Кыргызстан) через transfer learning.
+
+H4: Факторы ценообразования недвижимости в постсоветских странах Центральной Азии
+    имеют схожую структуру важности.
+
+________________
+
+
+ТРЕБОВАНИЯ К ДАННЫМ:
+
+1. Основной датасет (Бишкек, Кыргызстан):
+   - Целевой объем: 15,000+ объявлений
+   - Источники: house.kg, lalafo.kg, diesel.elcat.kg
+   - Временной период: минимум 12 месяцев для temporal analysis
+
+2. Дополнительные города Кыргызстана:
+   - Ош, Джалал-Абад: 2,000-3,000 объявлений
+   - Назначение: внутренняя валидация по регионам
+
+3. Cross-country датасет (Алматы, Казахстан):
+   - Целевой объем: 15,000+ объявлений
+   - Источник: krisha.kz
+   - Назначение: cross-market validation и transfer learning
+
+4. Benchmark датасет:
+   - Ames Housing Dataset (публичный, 2,930 записей)
+   - Назначение: сравнение с результатами из литературы
+
+Обязательные атрибуты каждой записи:
+   - Цена (целевая переменная)
+   - Площадь (общая, жилая, кухня)
+   - Количество комнат
+   - Этаж / этажность здания
+   - Тип недвижимости (квартира, дом, и т.д.)
+   - Район / микрорайон
+   - Географические координаты (lat, lon)
+   - Год постройки
+   - Состояние ремонта
+   - Дата публикации объявления (для temporal analysis)
+
+________________
+
+
+ОСНОВНЫЕ ЗАДАЧИ:
+
+1. Провести систематический обзор литературы по применению ML в оценке недвижимости
+   с фокусом на развивающиеся рынки и малые датасеты.
+
+2. Собрать и подготовить мультирегиональный датасет недвижимости Центральной Азии
+   (Кыргызстан, Казахстан) общим объемом 30,000+ записей.
+
+3. Разработать pipeline предобработки данных с геокодированием, feature engineering
+   и обработкой пропусков, адаптированный к специфике региона.
+
+4. Реализовать комплексный набор baseline-моделей: от традиционных гедонистических
+   (OLS, Ridge, Lasso) до современных ансамблевых методов (RF, XGBoost, LightGBM, CatBoost).
+
+5. Провести сравнительный анализ моделей с использованием статистических тестов
+   значимости (Friedman test, post-hoc Nemenyi test).
+
+6. Выполнить ablation study для количественной оценки вклада каждого компонента
+   pipeline (geo-features, temporal features, hyperparameter tuning).
+
+7. Исследовать переносимость моделей между рынками (cross-market validation)
+   и эффективность transfer learning подходов.
+
+8. Провести детальный error analysis по сегментам (районы, ценовые категории,
+   типы недвижимости) для выявления систематических ошибок модели.
+
+9. Опубликовать датасет и код для обеспечения воспроизводимости исследования.
+
+________________
+
+
+ПЛАН РАБОТЫ:
+
+1) Этап систематического обзора литературы
+   А) Поиск и анализ статей по ML в оценке недвижимости (2015-2024);
+   Б) Фокус на работы по развивающимся рынкам и малым датасетам;
+   В) Анализ методологий cross-market validation в смежных областях;
+   Г) Идентификация research gap и позиционирование работы;
+   Д) Формирование теоретической рамки исследования.
+
+2) Этап сбора данных
+   А) Разработка парсеров для платформ:
+      - house.kg (основной источник, Кыргызстан)
+      - lalafo.kg (дополнительный, Кыргызстан)
+      - krisha.kz (Казахстан, для cross-market validation)
+   Б) Сбор исторических данных (Wayback Machine) для расширения временного периода;
+   В) Геокодирование адресов через OpenStreetMap Nominatim / Yandex Geocoder;
+   Г) Валидация качества данных и удаление дубликатов;
+   Д) Документирование процесса сбора для reproducibility.
+
+3) Этап предобработки и feature engineering
+   А) Очистка данных:
+      - Обработка пропусков (MICE, KNN imputation)
+      - Детекция и анализ выбросов (IQR, Isolation Forest)
+      - Удаление дубликатов (fuzzy matching по адресам)
+   Б) Feature engineering с научным обоснованием:
+      - Географические: расстояние до центра, до POI (школы, парки, метро)
+      - Позиционные: категоризация этажа (первый/средний/последний)
+      - Временные: сезон публикации, тренд цен
+      - Производные: цена за м² соседних объектов (без target leakage)
+   В) Кодирование категориальных переменных:
+      - Target encoding с регуляризацией
+      - Leave-one-out encoding
+      - Сравнение подходов
+   Г) Предотвращение data leakage: строгое разделение train/validation/test
+      до любых трансформаций.
+
+4) Этап экспериментов
+   А) Baseline модели:
+      - Традиционные: OLS, Ridge, Lasso, ElasticNet
+      - Tree-based: Decision Tree, Random Forest, Extra Trees
+      - Boosting: XGBoost, LightGBM, CatBoost
+      - Meta: Stacking Ensemble
+   Б) Валидация:
+      - TimeSeriesSplit (primary) — учет временной структуры данных
+      - Stratified K-Fold (secondary) — для сравнения с литературой
+      - Hold-out test set (final) — финальная оценка
+   В) Оптимизация гиперпараметров:
+      - Optuna с TPE sampler
+      - Early stopping для предотвращения переобучения
+      - Cross-validated tuning
+   Г) Метрики качества:
+      - MAE, RMSE, MAPE, R² (основные)
+      - MdAE (робастная к выбросам)
+      - Quantile losses (для uncertainty estimation)
+
+5) Этап статистического анализа
+   А) Тесты значимости различий между моделями:
+      - Friedman test (non-parametric ANOVA)
+      - Post-hoc Nemenyi test с Bonferroni correction
+      - Critical difference diagrams
+   Б) Ablation study — вклад компонентов:
+      | Конфигурация              | MAE  | RMSE | R²   |
+      |---------------------------|------|------|------|
+      | Base features only        |  X   |  X   |  X   |
+      | + Geographical features   |  X   |  X   |  X   |
+      | + Temporal features       |  X   |  X   |  X   |
+      | + Advanced FE             |  X   |  X   |  X   |
+      | + Hyperparameter tuning   |  X   |  X   |  X   |
+   В) Learning curves — влияние размера датасета на качество;
+   Г) Feature importance:
+      - Permutation importance
+      - SHAP values (global и local)
+      - Partial Dependence Plots
+
+6) Этап cross-market validation
+   А) Эксперименты по переносимости:
+      - Train: Бишкек → Test: Алматы
+      - Train: Алматы → Test: Бишкек
+      - Train: Алматы → Fine-tune: Бишкек (small) → Test: Бишкек
+   Б) Анализ различий в feature importance между рынками;
+   В) Рекомендации по адаптации моделей для новых рынков.
+
+7) Этап error analysis
+   А) Сегментация ошибок:
+      - По районам города
+      - По ценовым категориям (бюджетное/среднее/премиум)
+      - По типу недвижимости
+      - По времени публикации
+   Б) Выявление систематического bias:
+      - Недооценка/переоценка в определенных сегментах
+      - Анализ worst-case predictions
+   В) Практические рекомендации для пользователей модели.
+
+8) Этап подготовки публикации
+   А) Написание статьи по структуре целевого журнала:
+      - Introduction (research gap, contributions)
+      - Related Work (20+ релевантных статей)
+      - Data and Methodology
+      - Experiments and Results
+      - Discussion
+      - Conclusion
+   Б) Подготовка supplementary materials:
+      - Детальные таблицы результатов
+      - Дополнительные визуализации
+   В) Публикация кода на GitHub с документацией;
+   Г) Публикация датасета на Zenodo/Kaggle;
+   Д) Submission и работа с рецензентами.
+
+________________
+
+
+МЕТОДОЛОГИЯ ЭКСПЕРИМЕНТОВ:
+
+Разделение данных:
+   - Training set: 70% (для обучения)
+   - Validation set: 15% (для tuning)
+   - Test set: 15% (для финальной оценки, используется один раз)
+   - Разделение по времени (temporal split) для основных экспериментов
+
+Воспроизводимость:
+   - Фиксация random seed = 42 для всех экспериментов
+   - Версионирование данных через DVC
+   - Логирование экспериментов через MLflow/Weights&Biases
+   - Docker-контейнер для воспроизведения окружения
+
+________________
+
+
+ЦЕЛЕВЫЕ ЖУРНАЛЫ (Q3):
+
+1. Expert Systems with Applications (Elsevier)
+   - Impact Factor: ~8.5
+   - Scope: применение AI/ML к практическим задачам
+   - Review time: 2-4 месяца
+
+2. Applied Soft Computing (Elsevier)
+   - Impact Factor: ~8.7
+   - Scope: soft computing методы
+   - Review time: 2-3 месяца
+
+3. Journal of Housing Economics (Elsevier)
+   - Impact Factor: ~2.5
+   - Scope: профильный журнал по экономике недвижимости
+   - Review time: 3-6 месяцев
+
+4. International Journal of Housing Markets and Analysis (Emerald)
+   - Impact Factor: ~1.5
+   - Scope: анализ рынков недвижимости
+   - Review time: 2-3 месяца (легче пройти review)
+
+________________
+
+
+ЛИТЕРАТУРА:
+
+Фундаментальные работы по ML:
+1. Hastie, T., Tibshirani, R., Friedman, J. The Elements of Statistical Learning. Springer, 2009.
+2. Chen, T., Guestrin, C. XGBoost: A Scalable Tree Boosting System. KDD, 2016.
+3. Ke, G. et al. LightGBM: A Highly Efficient Gradient Boosting Decision Tree. NeurIPS, 2017.
+4. Prokhorenkova, L. et al. CatBoost: Unbiased Boosting with Categorical Features. NeurIPS, 2018.
+
+ML в оценке недвижимости (ключевые):
+5. Park, B., Bae, J.K. Using Machine Learning Algorithms for Housing Price Prediction.
+   Expert Systems with Applications, 2015.
+6. Antipov, E.A., Pokryshevskaya, E.B. Mass Appraisal of Residential Apartments:
+   Random Forest Application. Expert Systems with Applications, 2012.
+7. Truong, Q. et al. Housing Price Prediction via Improved Machine Learning Techniques.
+   Procedia Computer Science, 2020.
+8. Pérez-Rave, J.I. et al. Pachinko-allocation-based house price prediction.
+   Journal of Housing Economics, 2019.
+
+Современные работы (2021-2024) — для обзора литературы:
+9. Rico-Juan, J.R., Taltavull de La Paz, P. Machine learning with explainability or
+   spatial hedonics tools? Applied Sciences, 2021.
+10. Čeh, M. et al. Estimating the Performance of Random Forest versus Multiple Regression
+    for Predicting Prices of Apartments. ISPRS, 2018.
+11. Yacim, J.A., Boshoff, D.G.B. Impact of Artificial Neural Networks Training Algorithms
+    on House Price Prediction. Real Estate Management and Valuation, 2018.
+12. Ho, W.K.O. et al. Predicting property prices with machine learning algorithms.
+    Journal of Property Research, 2021.
+
+Развивающиеся рынки:
+13. Selim, H. Determinants of house prices in Turkey. Quality & Quantity, 2009.
+14. Дополнить статьями по СНГ и Центральной Азии (если есть)
+
+Методология:
+15. Demšar, J. Statistical Comparisons of Classifiers over Multiple Data Sets. JMLR, 2006.
+16. Lundberg, S., Lee, S.I. A Unified Approach to Interpreting Model Predictions
+    (SHAP). NeurIPS, 2017.
+
+________________
+
+
+TIMELINE:
+
+Месяц 1-2:    Сбор данных и систематический обзор литературы
+Месяц 2-3:    Предобработка, EDA, feature engineering
+Месяц 3-4:    Эксперименты и статистический анализ
+Месяц 4-5:    Cross-market validation и error analysis
+Месяц 5-6:    Написание статьи и подготовка supplementary materials
+Месяц 7+:     Submission, review, revision
+
+________________
+
+
+ЧЕК-ЛИСТ ГОТОВНОСТИ К SUBMISSION:
+
+Данные:
+[ ] Собрано 15,000+ записей по Бишкеку
+[ ] Собрано 15,000+ записей по Алматы
+[ ] Собрано 2,000+ записей по другим городам Кыргызстана
+[ ] Данные очищены и задокументированы
+[ ] Датасет опубликован (Zenodo/Kaggle)
+
+Эксперименты:
+[ ] Реализовано 8+ baseline моделей
+[ ] Проведена оптимизация гиперпараметров (Optuna)
+[ ] Выполнен Friedman test + post-hoc analysis
+[ ] Построены learning curves
+[ ] Выполнен ablation study
+[ ] Проведен cross-market validation
+[ ] SHAP analysis завершен
+[ ] Error analysis по сегментам выполнен
+
+Воспроизводимость:
+[ ] Код опубликован на GitHub
+[ ] README с инструкциями
+[ ] Requirements.txt / environment.yml
+[ ] Фиксированы random seeds
+
+Статья:
+[ ] Abstract (200-250 слов)
+[ ] Introduction с четким research gap
+[ ] Related Work (20+ ссылок, 70%+ за последние 5 лет)
+[ ] Methodology детально описана
+[ ] Results с таблицами и визуализациями
+[ ] Discussion с limitations
+[ ] Conclusion с future work
+[ ] Supplementary materials
+
+________________
+
+
+Научный руководитель: Долматова Полина
+Автор: Раимбеков Мурат
