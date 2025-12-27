@@ -173,91 +173,96 @@ class HouseKGScraper:
                     data['price_per_m2'] = int(price_per_m2_match.group(1).replace(' ', ''))
                 break
 
-        # Парсинг info-row элементов
+        # Парсинг info-row элементов (label -> value)
         info_rows = soup.find_all(class_='info-row')
         for row in info_rows:
-            text = row.get_text(separator=' ', strip=True).lower()
+            children = [c for c in row.children if str(c).strip()]
+            if len(children) >= 2:
+                label = children[0].get_text(strip=True).lower() if hasattr(children[0], 'get_text') else ''
+                value = children[1].get_text(strip=True) if hasattr(children[1], 'get_text') else ''
+            else:
+                continue
 
-            # Этаж
-            if 'этаж' in text and 'floor' not in data:
-                floor_match = re.search(r'(\d+)\s*из\s*(\d+)', text)
+            # Этаж: "4 этаж из 4"
+            if label == 'этаж':
+                floor_match = re.search(r'(\d+)\s*этаж\s*из\s*(\d+)', value)
                 if floor_match:
                     data['floor'] = int(floor_match.group(1))
                     data['total_floors'] = int(floor_match.group(2))
 
-            # Площадь (если не нашли в заголовке)
-            if ('площадь' in text or 'общая' in text) and 'area' not in data:
-                area_match = re.search(r'([\d.,]+)\s*м', text)
-                if area_match:
-                    data['area'] = float(area_match.group(1).replace(',', '.'))
-
-            # Жилая площадь
-            if 'жилая' in text:
-                living_match = re.search(r'([\d.,]+)\s*м', text)
+            # Площадь: "90.8 м2, жилая: 90 м2, кухня: 30 м2"
+            elif label == 'площадь':
+                # Общая площадь
+                if 'area' not in data:
+                    area_match = re.search(r'^([\d.,]+)\s*м', value)
+                    if area_match:
+                        data['area'] = float(area_match.group(1).replace(',', '.'))
+                # Жилая
+                living_match = re.search(r'жилая[:\s]*([\d.,]+)', value)
                 if living_match:
                     data['living_area'] = float(living_match.group(1).replace(',', '.'))
-
-            # Кухня
-            if 'кухня' in text:
-                kitchen_match = re.search(r'([\d.,]+)\s*м', text)
+                # Кухня
+                kitchen_match = re.search(r'кухня[:\s]*([\d.,]+)', value)
                 if kitchen_match:
                     data['kitchen_area'] = float(kitchen_match.group(1).replace(',', '.'))
 
-            # Год постройки
-            if 'год' in text and 'постройки' in text:
-                year_match = re.search(r'(\d{4})', text)
+            # Дом: "кирпичный, 2011 г."
+            elif label == 'дом':
+                # Тип дома
+                for house_type in ['кирпич', 'панель', 'монолит', 'блочн']:
+                    if house_type in value.lower():
+                        data['house_type'] = house_type
+                        break
+                # Год постройки
+                year_match = re.search(r'(\d{4})', value)
                 if year_match:
                     data['year_built'] = int(year_match.group(1))
 
-            # Серия дома
-            if 'серия' in text:
-                series_text = text.replace('серия', '').strip()
-                if series_text:
-                    data['building_series'] = series_text
-
-            # Тип дома
-            if 'тип' in text and ('строен' in text or 'дом' in text):
-                for house_type in ['кирпич', 'панель', 'монолит', 'блочн']:
-                    if house_type in text:
-                        data['house_type'] = house_type
-                        break
+            # Серия
+            elif label == 'серия':
+                data['building_series'] = value
 
             # Состояние
-            if 'состояние' in text:
-                for condition in ['евроремонт', 'хорошее', 'среднее', 'требует', 'черновая', 'без отделки']:
-                    if condition in text:
-                        data['condition'] = condition
-                        break
+            elif label == 'состояние':
+                data['condition'] = value
 
             # Отопление
-            if 'отопление' in text:
-                for heating in ['центральное', 'газовое', 'электрическое', 'печное', 'автономное']:
-                    if heating in text:
-                        data['heating'] = heating
-                        break
+            elif label == 'отопление':
+                data['heating'] = value
 
             # Санузел
-            if 'санузел' in text or 'санузлы' in text:
-                if 'раздельный' in text:
-                    data['bathroom'] = 'раздельный'
-                elif 'совмещенный' in text:
-                    data['bathroom'] = 'совмещенный'
-                elif '2' in text or 'два' in text:
-                    data['bathroom'] = '2+'
+            elif label == 'санузел':
+                data['bathroom'] = value
 
-        # Адрес
-        address_elem = soup.find(class_='address')
-        if not address_elem:
-            # Попробуем найти в заголовке
-            if header:
-                address_spans = header.find_all('span')
-                for span in address_spans:
-                    span_text = span.get_text(strip=True)
-                    if 'Бишкек' in span_text or 'м-н' in span_text or 'мкр' in span_text:
-                        data['address'] = span_text
-                        break
-        else:
+            # Тип предложения
+            elif label == 'тип предложения':
+                data['offer_type'] = value
+
+            # Балкон
+            elif label == 'балкон':
+                data['balcony'] = value
+
+            # Мебель
+            elif label == 'мебель':
+                data['furniture'] = value
+
+            # Интернет
+            elif label == 'интернет':
+                data['internet'] = value
+
+            # Парковка
+            elif label == 'парковка':
+                data['parking'] = value
+
+        # Адрес - ищем в details-header
+        address_elem = soup.select_one('.details-header .address')
+        if address_elem:
             data['address'] = address_elem.get_text(strip=True)
+        else:
+            # Fallback
+            address_elem = soup.find(class_='address')
+            if address_elem:
+                data['address'] = address_elem.get_text(strip=True)
 
         # Район из адреса
         if 'address' in data:
@@ -267,21 +272,17 @@ class HouseKGScraper:
             if district_match:
                 data['district'] = district_match.group(1)
 
-        # Координаты из JavaScript
-        scripts = soup.find_all('script')
-        for script in scripts:
-            if script.string:
-                # Ищем координаты в разных форматах
-                lat_match = re.search(r'["\']?lat(?:itude)?["\']?\s*[:=]\s*["\']?([\d.]+)', script.string)
-                lon_match = re.search(r'["\']?(?:lon|lng|longitude)["\']?\s*[:=]\s*["\']?([\d.]+)', script.string)
-                if lat_match and lon_match:
-                    lat = float(lat_match.group(1))
-                    lon = float(lon_match.group(1))
-                    # Проверка валидности координат (примерно Бишкек)
-                    if 42 < lat < 43 and 74 < lon < 75:
-                        data['latitude'] = lat
-                        data['longitude'] = lon
-                        break
+        # Координаты из карты (наиболее точные)
+        map_elem = soup.find(id='map2gis')
+        if map_elem:
+            lat = map_elem.get('data-lat')
+            lon = map_elem.get('data-lon')
+            if lat and lon:
+                try:
+                    data['latitude'] = float(lat)
+                    data['longitude'] = float(lon)
+                except ValueError:
+                    pass
 
         # ID объявления из URL
         id_match = re.search(r'/details/([^/]+)', url)
