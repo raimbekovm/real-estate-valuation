@@ -1,0 +1,103 @@
+# Real Estate Valuation Configuration
+
+# Data collection settings
+scraping:
+  sources:
+    house_kg:
+      base_url: "https://www.house.kg"
+      listing_url: "https://www.house.kg/kupit-kvartiru"
+      delay_range: [2, 4]  # seconds between requests
+      max_retries: 3
+      timeout: 30
+
+    krisha_kz:
+      base_url: "https://krisha.kz"
+      listing_url: "https://krisha.kz/prodazha/kvartiry/almaty/"
+      delay_range: [2, 4]
+      max_retries: 3
+      timeout: 30
+
+# Data paths
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  external_dir: "data/external"
+
+# Preprocessing settings
+preprocessing:
+  # Missing value handling
+  imputation:
+    numeric_strategy: "median"
+    categorical_strategy: "mode"
+
+  # Outlier detection
+  outliers:
+    method: "iqr"
+    iqr_multiplier: 1.5
+    price_min_usd: 10000
+    price_max_usd: 1000000
+    area_min_m2: 15
+    area_max_m2: 500
+
+  # Feature engineering
+  features:
+    geo:
+      bishkek_center: [42.8746, 74.5698]
+      almaty_center: [43.2220, 76.8512]
+
+    floor_categories:
+      - "first"
+      - "middle"
+      - "last"
+
+# Model settings
+models:
+  random_seed: 42
+  test_size: 0.15
+  validation_size: 0.15
+
+  # Cross-validation
+  cv:
+    n_splits: 5
+    strategy: "time_series"  # or "kfold"
+
+  # Hyperparameter optimization
+  optimization:
+    n_trials: 100
+    timeout: 3600  # seconds
+    sampler: "tpe"
+
+  # Models to train
+  baseline:
+    - "linear_regression"
+    - "ridge"
+    - "lasso"
+    - "elastic_net"
+
+  tree_based:
+    - "random_forest"
+    - "extra_trees"
+
+  boosting:
+    - "xgboost"
+    - "lightgbm"
+    - "catboost"
+
+# Metrics
+metrics:
+  primary: "mae"
+  secondary:
+    - "rmse"
+    - "mape"
+    - "r2"
+    - "mdae"
+
+# Experiment tracking
+tracking:
+  mlflow:
+    tracking_uri: "mlruns"
+    experiment_name: "real-estate-valuation"
+
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
