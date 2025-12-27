@@ -36,6 +36,10 @@ ENV/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+# Pytest
+.pytest_cache/
+htmlcov/
+
 # Data (large files)
 data/raw/*.csv
 data/raw/*.json
