@@ -254,6 +254,48 @@ class HouseKGScraper:
             elif label == 'парковка':
                 data['parking'] = value
 
+            # Высота потолков: "2.7 м."
+            elif label == 'высота потолков':
+                height_match = re.search(r'([\d.,]+)', value)
+                if height_match:
+                    data['ceiling_height'] = float(height_match.group(1).replace(',', '.'))
+
+            # Газ
+            elif label == 'газ':
+                data['gas'] = value
+
+            # Пол (тип покрытия)
+            elif label == 'пол':
+                data['floor_type'] = value
+
+            # Входная дверь
+            elif label == 'входная дверь':
+                data['entrance_door'] = value
+
+            # Телефон
+            elif label == 'телефон':
+                data['has_phone'] = value == 'есть'
+
+            # Безопасность
+            elif label == 'безопасность':
+                data['security'] = value
+
+            # Разное (дополнительные удобства)
+            elif label == 'разное':
+                data['amenities'] = value
+
+            # Документы
+            elif label == 'правоустанавливающие документы':
+                data['documents'] = value
+
+            # Рассрочка
+            elif label == 'возможность рассрочки':
+                data['installment'] = value != 'нет'
+
+            # Ипотека
+            elif label == 'возможность ипотеки':
+                data['mortgage'] = value != 'нет'
+
         # Адрес - ищем в details-header
         address_elem = soup.select_one('.details-header .address')
         if address_elem:
