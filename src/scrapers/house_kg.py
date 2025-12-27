@@ -279,10 +279,19 @@ class HouseKGScraper:
         # Район из адреса
         if 'address' in data:
             addr = data['address']
-            # Извлечение микрорайона
-            district_match = re.search(r'(\d+\s*м-н|\d+\s*мкр|[А-Яа-я]+\s*м-н)', addr)
+            # Извлечение микрорайона (м-н, мкр, ж/м)
+            district_match = re.search(r'([\w-]+\s*(?:м-н|мкр|ж/м))', addr)
             if district_match:
                 data['district'] = district_match.group(1)
+            else:
+                # Попробуем извлечь район из начала адреса после города
+                # Формат: "Бишкек, Район, улица..."
+                parts = addr.split(',')
+                if len(parts) >= 2:
+                    potential_district = parts[1].strip()
+                    # Если это не улица (не содержит типичных слов)
+                    if not any(x in potential_district.lower() for x in ['ул.', 'улица', 'пер.', 'переулок', 'просп.']):
+                        data['district'] = potential_district
 
         # Координаты из карты (наиболее точные)
         map_elem = soup.find(id='map2gis')
