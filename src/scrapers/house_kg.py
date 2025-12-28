@@ -26,13 +26,66 @@ class HouseKGScraper:
     """Парсер для сбора данных о недвижимости с house.kg"""
 
     BASE_URL = "https://www.house.kg"
-    LISTING_URL = "https://www.house.kg/kupit-kvartiru"
 
-    def __init__(self, delay_range=(1, 3)):
+    # Доступные города (town ID)
+    CITIES = {
+        'bishkek': 2,
+        'osh': 36,
+        'jalal-abad': 27,
+        'karakol': 18,
+        'tokmok': 3,
+    }
+
+    def __init__(self, city='bishkek', delay_range=(1, 3)):
+        self.city = city.lower()
+        if self.city not in self.CITIES:
+            raise ValueError(f"Неизвестный город: {city}. Доступные: {list(self.CITIES.keys())}")
+        self.town_id = self.CITIES[self.city]
+        self.listing_url = f"https://www.house.kg/kupit-kvartiru?town={self.town_id}"
         self.delay_range = delay_range
         self.ua = UserAgent()
         self.session = requests.Session()
         self.data = []
+        self.parsed_ids = set()
+
+    def _get_latest_intermediate_file(self):
+        """Получение последнего промежуточного файла"""
+        output_dir = Path(__file__).parent.parent.parent / 'data' / 'raw'
+        files = list(output_dir.glob(f'house_kg_{self.city}_intermediate_*.csv'))
+        # Fallback для старых файлов (bishkek без префикса)
+        if not files and self.city == 'bishkek':
+            files = list(output_dir.glob('house_kg_intermediate_*.csv'))
+        if not files:
+            return None
+        return max(files, key=lambda f: f.stat().st_mtime)
+
+    def load_progress(self):
+        """Загрузка прогресса из последнего промежуточного файла"""
+        latest_file = self._get_latest_intermediate_file()
+        if not latest_file:
+            logger.info("Промежуточные файлы не найдены, начинаем с нуля")
+            return 0
+
+        try:
+            df = pd.read_csv(latest_file)
+            self.data = df.to_dict('records')
+
+            # Извлекаем listing_id для пропуска уже обработанных
+            if 'listing_id' in df.columns:
+                self.parsed_ids = set(df['listing_id'].dropna().astype(str))
+            elif 'url' in df.columns:
+                # Извлекаем ID из URL
+                for url in df['url'].dropna():
+                    match = re.search(r'/details/([^/?]+)', str(url))
+                    if match:
+                        self.parsed_ids.add(match.group(1))
+
+            logger.info(f"Загружено {len(self.data)} записей из {latest_file.name}")
+            logger.info(f"Найдено {len(self.parsed_ids)} уникальных ID для пропуска")
+            return len(self.data)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки прогресса: {e}")
+            return 0
 
     def _get_headers(self):
         return {
@@ -102,7 +155,7 @@ class HouseKGScraper:
 
     def get_listing_urls(self, page=1):
         """Получение списка URL объявлений со страницы каталога"""
-        url = f"{self.LISTING_URL}?page={page}"
+        url = f"{self.listing_url}&page={page}"
 
         try:
             response = self.session.get(url, headers=self._get_headers(), timeout=30)
@@ -318,7 +371,7 @@ class HouseKGScraper:
         def has_listings(page_num):
             """Проверка наличия объявлений на странице"""
             try:
-                url = f"{self.LISTING_URL}?page={page_num}"
+                url = f"{self.listing_url}&page={page_num}"
                 response = self.session.get(url, headers=self._get_headers(), timeout=30)
                 soup = BeautifulSoup(response.text, 'lxml')
                 listings = soup.find_all('a', href=re.compile(r'/details/'))
@@ -346,14 +399,19 @@ class HouseKGScraper:
         logger.info(f"Найдено страниц: {low}")
         return low
 
-    def scrape(self, max_pages=None, save_every=50):
+    def scrape(self, max_pages=None, save_every=50, resume=False):
         """
         Основной метод сбора данных
 
         Args:
             max_pages: Максимальное количество страниц для парсинга
             save_every: Сохранять промежуточные результаты каждые N объявлений
+            resume: Продолжить с последней сохранённой точки
         """
+        if resume:
+            loaded_count = self.load_progress()
+            logger.info(f"Режим возобновления: загружено {loaded_count} записей")
+
         total_pages = self.get_total_pages()
         if max_pages:
             total_pages = min(total_pages, max_pages)
@@ -370,11 +428,24 @@ class HouseKGScraper:
 
         logger.info(f"Собрано {len(all_urls)} уникальных URL")
 
+        # Фильтрация уже обработанных URL
+        if self.parsed_ids:
+            original_count = len(all_urls)
+            all_urls = [
+                url for url in all_urls
+                if not any(pid in url for pid in self.parsed_ids)
+            ]
+            skipped = original_count - len(all_urls)
+            logger.info(f"Пропущено {skipped} уже обработанных, осталось {len(all_urls)}")
+
         # Парсинг каждого объявления
         for i, url in enumerate(tqdm(all_urls, desc="Парсинг объявлений")):
             listing_data = self.parse_listing(url)
             if listing_data and listing_data.get('price_usd'):
                 self.data.append(listing_data)
+                # Добавляем ID в set для избежания дублей
+                if listing_data.get('listing_id'):
+                    self.parsed_ids.add(listing_data['listing_id'])
 
             # Промежуточное сохранение
             if (i + 1) % save_every == 0:
@@ -394,7 +465,7 @@ class HouseKGScraper:
 
         df = pd.DataFrame(self.data)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filepath = output_dir / f'house_kg_intermediate_{timestamp}.csv'
+        filepath = output_dir / f'house_kg_{self.city}_intermediate_{timestamp}.csv'
         df.to_csv(filepath, index=False, encoding='utf-8')
         logger.info(f"Промежуточное сохранение: {len(df)} записей -> {filepath}")
 
@@ -411,7 +482,7 @@ class HouseKGScraper:
 
         if filename is None:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'house_kg_bishkek_{timestamp}.csv'
+            filename = f'house_kg_{self.city}_{timestamp}.csv'
 
         filepath = output_dir / filename
         df.to_csv(filepath, index=False, encoding='utf-8')
@@ -422,15 +493,30 @@ class HouseKGScraper:
 
 def main():
     """Запуск парсера"""
-    scraper = HouseKGScraper(delay_range=(2, 4))
+    import argparse
 
-    # Парсинг (начнём с небольшого количества для теста)
-    print("Запуск парсера house.kg...")
+    parser = argparse.ArgumentParser(description='Парсер house.kg')
+    parser.add_argument('--city', type=str, default='bishkek',
+                        choices=['bishkek', 'osh', 'jalal-abad', 'karakol', 'tokmok'],
+                        help='Город для парсинга')
+    parser.add_argument('--resume', action='store_true',
+                        help='Продолжить с последней сохранённой точки')
+    parser.add_argument('--max-pages', type=int, default=None,
+                        help='Максимальное количество страниц')
+    parser.add_argument('--delay-min', type=float, default=2,
+                        help='Минимальная задержка между запросами (сек)')
+    parser.add_argument('--delay-max', type=float, default=4,
+                        help='Максимальная задержка между запросами (сек)')
+    args = parser.parse_args()
+
+    scraper = HouseKGScraper(city=args.city, delay_range=(args.delay_min, args.delay_max))
+
+    print(f"Запуск парсера house.kg ({args.city.capitalize()})...")
+    if args.resume:
+        print("Режим возобновления: загрузка предыдущего прогресса...")
     print("Для полного сбора данных может потребоваться несколько часов")
 
-    # Тестовый запуск - 5 страниц
-    # Для полного сбора убрать max_pages или увеличить
-    scraper.scrape(max_pages=5)
+    scraper.scrape(max_pages=args.max_pages, resume=args.resume)
 
     # Сохранение
     filepath = scraper.save()
