@@ -43,10 +43,18 @@ def load_and_prepare_data(filepath: str):
 
     # Числовые признаки
     numeric_features = [
+        # Базовые
         'rooms', 'area', 'floor', 'total_floors', 'year_built',
         'latitude', 'longitude',
+        # Дороги
         'dist_to_road_primary', 'dist_to_road_secondary',
-        'dist_to_road_tertiary', 'dist_to_main_road'
+        'dist_to_road_tertiary', 'dist_to_main_road',
+        # POI
+        'dist_to_bazaars', 'dist_to_parks', 'dist_to_malls',
+        'dist_to_universities', 'dist_to_hospitals', 'dist_to_transport',
+        'dist_to_admin', 'dist_to_premium',
+        # Гео
+        'distance_to_center', 'building_age', 'is_premium_zone'
     ]
 
     # Категориальные признаки
