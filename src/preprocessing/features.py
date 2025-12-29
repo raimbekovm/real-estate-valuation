@@ -2,10 +2,12 @@
 Feature Engineering для данных недвижимости
 """
 
+import json
 import numpy as np
 import pandas as pd
 from math import radians, sin, cos, sqrt, atan2
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Optional, Tuple, List, Dict
 
 
 # Координаты центров городов
@@ -292,6 +294,192 @@ def add_premium_zone_features(df: pd.DataFrame, zones: dict = None) -> pd.DataFr
 
     # Флаг премиум зоны (в радиусе 1 км от любой премиум зоны)
     df['is_premium_zone'] = (df['dist_to_premium'] <= 1.0).astype(int)
+
+    return df
+
+
+def load_roads_from_geojson(
+    geojson_path: str,
+    bbox: Tuple[float, float, float, float] = None,
+    road_types: List[str] = None
+) -> Dict[str, List[List[Tuple[float, float]]]]:
+    """
+    Загружает дороги из GeoJSON и фильтрует по bbox
+
+    Args:
+        geojson_path: путь к GeoJSON файлу
+        bbox: (min_lat, min_lon, max_lat, max_lon) - bounding box для фильтрации
+        road_types: список типов дорог для загрузки
+
+    Returns:
+        Словарь {road_type: [[(lat, lon), ...], ...]}
+    """
+    if road_types is None:
+        road_types = ['trunk', 'primary', 'secondary', 'tertiary']
+
+    # Bounding box Бишкека (с запасом)
+    if bbox is None:
+        bbox = (42.75, 74.35, 43.00, 74.75)
+
+    min_lat, min_lon, max_lat, max_lon = bbox
+
+    roads_by_type = {rt: [] for rt in road_types}
+
+    with open(geojson_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    for feature in data.get('features', []):
+        props = feature.get('properties', {})
+        fclass = props.get('fclass', '')
+
+        if fclass not in road_types:
+            continue
+
+        geometry = feature.get('geometry', {})
+        if geometry.get('type') != 'MultiLineString':
+            continue
+
+        coords = geometry.get('coordinates', [])
+
+        for line in coords:
+            # Проверяем, попадает ли хоть одна точка в bbox
+            line_points = []
+            in_bbox = False
+
+            for lon, lat in line:
+                if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
+                    in_bbox = True
+                line_points.append((lat, lon))
+
+            if in_bbox and line_points:
+                roads_by_type[fclass].append(line_points)
+
+    return roads_by_type
+
+
+def point_to_segment_distance(
+    point_lat: float, point_lon: float,
+    seg_start: Tuple[float, float],
+    seg_end: Tuple[float, float]
+) -> float:
+    """
+    Расстояние от точки до отрезка (в км)
+    Использует проекцию точки на линию
+    """
+    lat1, lon1 = seg_start
+    lat2, lon2 = seg_end
+
+    # Вектор отрезка
+    dx = lon2 - lon1
+    dy = lat2 - lat1
+
+    # Длина отрезка в квадрате
+    seg_len_sq = dx * dx + dy * dy
+
+    if seg_len_sq == 0:
+        # Отрезок - точка
+        return haversine_distance(point_lat, point_lon, lat1, lon1)
+
+    # Параметр проекции точки на линию
+    t = max(0, min(1, ((point_lon - lon1) * dx + (point_lat - lat1) * dy) / seg_len_sq))
+
+    # Ближайшая точка на отрезке
+    proj_lat = lat1 + t * dy
+    proj_lon = lon1 + t * dx
+
+    return haversine_distance(point_lat, point_lon, proj_lat, proj_lon)
+
+
+def distance_to_road_type(
+    lat: float, lon: float,
+    road_lines: List[List[Tuple[float, float]]],
+    max_distance: float = 5.0
+) -> float:
+    """
+    Минимальное расстояние от точки до дорог определённого типа
+
+    Args:
+        lat, lon: координаты точки
+        road_lines: список линий дорог
+        max_distance: максимальное расстояние для поиска (оптимизация)
+
+    Returns:
+        Расстояние в км
+    """
+    min_dist = float('inf')
+
+    for line in road_lines:
+        # Быстрая проверка - если центр линии далеко, пропускаем
+        if len(line) > 0:
+            mid_idx = len(line) // 2
+            mid_lat, mid_lon = line[mid_idx]
+            rough_dist = haversine_distance(lat, lon, mid_lat, mid_lon)
+            if rough_dist > max_distance * 2:
+                continue
+
+        # Проверяем каждый сегмент линии
+        for i in range(len(line) - 1):
+            dist = point_to_segment_distance(lat, lon, line[i], line[i + 1])
+            if dist < min_dist:
+                min_dist = dist
+                if min_dist < 0.01:  # Меньше 10 метров - достаточно близко
+                    return min_dist
+
+    return min_dist if min_dist != float('inf') else np.nan
+
+
+def add_road_distance_features(
+    df: pd.DataFrame,
+    geojson_path: str = None,
+    road_types: List[str] = None
+) -> pd.DataFrame:
+    """
+    Добавляет расстояния до дорог разных типов
+
+    Args:
+        df: DataFrame с колонками latitude и longitude
+        geojson_path: путь к GeoJSON с дорогами
+        road_types: типы дорог для расчёта
+
+    Returns:
+        DataFrame с колонками dist_to_road_{type}
+    """
+    df = df.copy()
+
+    if geojson_path is None:
+        # Путь по умолчанию
+        geojson_path = Path(__file__).parent.parent.parent / 'data' / 'geo' / 'bishkek_roads.geojson'
+
+    if road_types is None:
+        road_types = ['trunk', 'primary', 'secondary', 'tertiary']
+
+    print(f"Загрузка дорог из {geojson_path}...")
+    roads = load_roads_from_geojson(str(geojson_path), road_types=road_types)
+
+    for road_type in road_types:
+        road_lines = roads.get(road_type, [])
+        print(f"  {road_type}: {len(road_lines)} сегментов")
+
+        if not road_lines:
+            df[f'dist_to_road_{road_type}'] = np.nan
+            continue
+
+        col_name = f'dist_to_road_{road_type}'
+
+        distances = []
+        for idx, row in df.iterrows():
+            if pd.isna(row['latitude']) or pd.isna(row['longitude']):
+                distances.append(np.nan)
+            else:
+                dist = distance_to_road_type(row['latitude'], row['longitude'], road_lines)
+                distances.append(dist)
+
+        df[col_name] = distances
+
+    # Минимальное расстояние до любой главной дороги
+    road_cols = [f'dist_to_road_{rt}' for rt in road_types if f'dist_to_road_{rt}' in df.columns]
+    if road_cols:
+        df['dist_to_main_road'] = df[road_cols].min(axis=1)
 
     return df
 
