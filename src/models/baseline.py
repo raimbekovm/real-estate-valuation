@@ -54,12 +54,20 @@ def load_and_prepare_data(filepath: str):
         'dist_to_universities', 'dist_to_hospitals', 'dist_to_transport',
         'dist_to_admin', 'dist_to_premium',
         # Гео
-        'distance_to_center', 'building_age', 'is_premium_zone'
+        'distance_to_center', 'building_age', 'is_premium_zone',
+        # Новые: из существующих данных
+        'ceiling_height_clean', 'has_separate_bathroom', 'has_multiple_bathrooms',
+        'has_balcony', 'has_glazed_balcony', 'has_parking',
+        'is_elite', 'is_soviet_series',
+        # Новые: производные
+        'area_per_room', 'floor_ratio',
+        'is_first_floor', 'is_last_floor', 'is_middle_floor',
+        'is_new_building', 'is_highrise', 'is_lowrise'
     ]
 
     # Категориальные признаки
     categorical_features = [
-        'house_type', 'condition', 'heating'
+        'house_type', 'condition', 'heating', 'building_series_cat'
     ]
 
     # Фильтруем колонки которые есть

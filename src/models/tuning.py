@@ -27,17 +27,29 @@ def load_data():
     target = 'price_per_m2'
 
     numeric_features = [
+        # Базовые
         'rooms', 'area', 'floor', 'total_floors', 'year_built',
         'latitude', 'longitude',
+        # Дороги
         'dist_to_road_primary', 'dist_to_road_secondary',
         'dist_to_road_tertiary', 'dist_to_main_road',
+        # POI
         'dist_to_bazaars', 'dist_to_parks', 'dist_to_malls',
         'dist_to_universities', 'dist_to_hospitals', 'dist_to_transport',
         'dist_to_admin', 'dist_to_premium',
-        'distance_to_center', 'building_age', 'is_premium_zone'
+        # Гео
+        'distance_to_center', 'building_age', 'is_premium_zone',
+        # Новые: из существующих данных
+        'ceiling_height_clean', 'has_separate_bathroom', 'has_multiple_bathrooms',
+        'has_balcony', 'has_glazed_balcony', 'has_parking',
+        'is_elite', 'is_soviet_series',
+        # Новые: производные
+        'area_per_room', 'floor_ratio',
+        'is_first_floor', 'is_last_floor', 'is_middle_floor',
+        'is_new_building', 'is_highrise', 'is_lowrise'
     ]
 
-    categorical_features = ['house_type', 'condition', 'heating']
+    categorical_features = ['house_type', 'condition', 'heating', 'building_series_cat']
 
     numeric_features = [f for f in numeric_features if f in df.columns]
     categorical_features = [f for f in categorical_features if f in df.columns]
