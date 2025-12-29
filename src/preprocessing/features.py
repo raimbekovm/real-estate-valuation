@@ -518,6 +518,91 @@ def add_area_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_extra_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Добавляет дополнительные признаки из существующих данных
+
+    Args:
+        df: DataFrame с сырыми данными
+
+    Returns:
+        DataFrame с новыми признаками
+    """
+    df = df.copy()
+
+    # === Documents: красная книга ===
+    if 'documents' in df.columns:
+        df['has_red_book'] = df['documents'].fillna('').str.lower().str.contains('красная книга').astype(int)
+        df['has_tech_passport'] = df['documents'].fillna('').str.lower().str.contains('технический паспорт').astype(int)
+
+    # === Gas: магистральный газ ===
+    if 'gas' in df.columns:
+        df['has_main_gas'] = (df['gas'].fillna('') == 'магистральный').astype(int)
+        df['has_gas'] = df['gas'].notna().astype(int)
+
+    # === Furniture: мебель ===
+    if 'furniture' in df.columns:
+        df['has_furniture'] = df['furniture'].fillna('').str.lower().apply(
+            lambda x: 1 if 'меблированная' in x or 'частично' in x else 0
+        )
+        df['is_empty'] = (df['furniture'].fillna('') == 'пустая').astype(int)
+
+    # === Floor type: тип пола ===
+    if 'floor_type' in df.columns:
+        df['has_parquet'] = df['floor_type'].fillna('').str.lower().str.contains('паркет').astype(int)
+        df['has_laminate'] = df['floor_type'].fillna('').str.lower().str.contains('ламинат').astype(int)
+
+    # === Building decade: декада постройки ===
+    if 'year_built' in df.columns:
+        df['building_decade'] = pd.cut(
+            df['year_built'],
+            bins=[0, 1959, 1969, 1979, 1989, 1999, 2009, 2019, 2030],
+            labels=['pre1960', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s']
+        )
+
+    return df
+
+
+def add_district_encoding(df: pd.DataFrame, target_col: str = 'price_per_m2') -> pd.DataFrame:
+    """
+    Добавляет target encoding для районов
+
+    Args:
+        df: DataFrame с колонками district и target_col
+        target_col: целевая переменная для encoding
+
+    Returns:
+        DataFrame с district_price_mean и district_price_median
+    """
+    df = df.copy()
+
+    if 'district' not in df.columns or target_col not in df.columns:
+        return df
+
+    # Средняя цена по району
+    district_stats = df.groupby('district')[target_col].agg(['mean', 'median', 'count']).reset_index()
+    district_stats.columns = ['district', 'district_price_mean', 'district_price_median', 'district_count']
+
+    # Сглаживание для районов с малым количеством объявлений
+    global_mean = df[target_col].mean()
+    min_samples = 5
+
+    # Smoothed mean: (n * mean + m * global_mean) / (n + m)
+    district_stats['district_price_smoothed'] = (
+        district_stats['district_count'] * district_stats['district_price_mean'] +
+        min_samples * global_mean
+    ) / (district_stats['district_count'] + min_samples)
+
+    # Мержим обратно
+    df = df.merge(
+        district_stats[['district', 'district_price_mean', 'district_price_median', 'district_price_smoothed']],
+        on='district',
+        how='left'
+    )
+
+    return df
+
+
 def add_all_features(
     df: pd.DataFrame,
     city: str = 'bishkek',
