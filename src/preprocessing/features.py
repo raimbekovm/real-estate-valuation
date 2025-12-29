@@ -14,6 +14,64 @@ CITY_CENTERS = {
     'almaty': (43.2567, 76.9286),   # Алматы, центр
 }
 
+# POI Бишкека (Points of Interest)
+BISHKEK_POI = {
+    # Базары/Рынки
+    'bazaars': [
+        ('osh_bazaar', 42.874823, 74.569599),
+        ('dordoi_bazaar', 42.939732, 74.620613),
+        ('ortosay_bazaar', 42.836209, 74.615931),
+        ('alamedin_bazaar', 42.88683, 74.637305),
+    ],
+    # Парки
+    'parks': [
+        ('dubovy_park', 42.877681, 74.606759),
+        ('ataturk_park', 42.839587, 74.595725),
+        ('karagach_grove', 42.900362, 74.619652),
+        ('victory_park', 42.826531, 74.604411),
+        ('botanical_garden', 42.857152, 74.590671),
+    ],
+    # Торговые центры
+    'malls': [
+        ('bishkek_park', 42.875029, 74.590403),
+        ('dordoi_plaza', 42.874685, 74.618469),
+        ('vefa_center', 42.857078, 74.609628),
+        ('tsum', 42.876813, 74.61499),
+    ],
+    # Университеты
+    'universities': [
+        ('auca', 42.81132, 74.627743),
+        ('krsu', 42.874862, 74.627114),
+        ('bhu', 42.850424, 74.585821),
+        ('knu', 42.8822, 74.586638),
+    ],
+    # Медицина
+    'hospitals': [
+        ('national_hospital', 42.869973, 74.596739),
+        ('city_hospital', 42.876149, 74.5619),
+    ],
+    # Транспорт
+    'transport': [
+        ('west_bus_station', 42.873213, 74.406103),
+        ('east_bus_station', 42.887128, 74.62894),
+        ('railway_station', 42.864179, 74.605693),
+    ],
+    # Административный центр
+    'admin': [
+        ('jogorku_kenesh', 42.876814, 74.600155),
+        ('ala_too_square', 42.875039, 74.603604),
+        ('erkindik_boulevard', 42.864402, 74.605287),
+    ],
+}
+
+# Премиум зоны Бишкека (центры районов)
+BISHKEK_PREMIUM_ZONES = {
+    'golden_square': (42.8688, 74.6033),    # Золотой квадрат
+    'voentorg': (42.8722, 74.5941),          # Военторг
+    'railway_area': (42.8650, 74.6070),      # ЖД вокзал
+    'mossovet': (42.8700, 74.6117),          # Моссовет
+}
+
 
 def haversine_distance(
     lat1: float, lon1: float,
@@ -168,6 +226,76 @@ def add_floor_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_poi_distances(df: pd.DataFrame, poi_dict: dict = None) -> pd.DataFrame:
+    """
+    Добавляет расстояния до ближайших POI каждой категории
+
+    Args:
+        df: DataFrame с колонками latitude и longitude
+        poi_dict: словарь POI (по умолчанию BISHKEK_POI)
+
+    Returns:
+        DataFrame с колонками dist_to_{category}
+    """
+    df = df.copy()
+
+    if poi_dict is None:
+        poi_dict = BISHKEK_POI
+
+    for category, pois in poi_dict.items():
+        col_name = f'dist_to_{category}'
+
+        def calc_min_distance(row):
+            if pd.isna(row['latitude']) or pd.isna(row['longitude']):
+                return np.nan
+
+            distances = []
+            for name, lat, lon in pois:
+                dist = haversine_distance(row['latitude'], row['longitude'], lat, lon)
+                distances.append(dist)
+
+            return min(distances) if distances else np.nan
+
+        df[col_name] = df.apply(calc_min_distance, axis=1)
+
+    return df
+
+
+def add_premium_zone_features(df: pd.DataFrame, zones: dict = None) -> pd.DataFrame:
+    """
+    Добавляет признаки близости к премиум зонам
+
+    Args:
+        df: DataFrame с колонками latitude и longitude
+        zones: словарь премиум зон (по умолчанию BISHKEK_PREMIUM_ZONES)
+
+    Returns:
+        DataFrame с колонками dist_to_premium и is_premium_zone
+    """
+    df = df.copy()
+
+    if zones is None:
+        zones = BISHKEK_PREMIUM_ZONES
+
+    def calc_min_premium_distance(row):
+        if pd.isna(row['latitude']) or pd.isna(row['longitude']):
+            return np.nan
+
+        distances = []
+        for name, (lat, lon) in zones.items():
+            dist = haversine_distance(row['latitude'], row['longitude'], lat, lon)
+            distances.append(dist)
+
+        return min(distances) if distances else np.nan
+
+    df['dist_to_premium'] = df.apply(calc_min_premium_distance, axis=1)
+
+    # Флаг премиум зоны (в радиусе 1 км от любой премиум зоны)
+    df['is_premium_zone'] = (df['dist_to_premium'] <= 1.0).astype(int)
+
+    return df
+
+
 def add_area_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Добавляет признаки связанные с площадью
@@ -205,7 +333,8 @@ def add_area_features(df: pd.DataFrame) -> pd.DataFrame:
 def add_all_features(
     df: pd.DataFrame,
     city: str = 'bishkek',
-    current_year: int = 2024
+    current_year: int = 2025,
+    include_poi: bool = True
 ) -> pd.DataFrame:
     """
     Добавляет все признаки
@@ -214,6 +343,7 @@ def add_all_features(
         df: исходный DataFrame
         city: город для расчета расстояния до центра
         current_year: текущий год
+        include_poi: включать ли POI признаки (только для Бишкека)
 
     Returns:
         DataFrame со всеми новыми признаками
@@ -223,6 +353,11 @@ def add_all_features(
     df = add_distance_to_center(df, city)
     df = add_floor_features(df)
     df = add_area_features(df)
+
+    # POI признаки (пока только для Бишкека)
+    if include_poi and city.lower() == 'bishkek':
+        df = add_poi_distances(df)
+        df = add_premium_zone_features(df)
 
     return df
 
