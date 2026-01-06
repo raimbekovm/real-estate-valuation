@@ -48,6 +48,11 @@ data/processed/*.parquet
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# Databases (contain scraped personal data)
+data/databases/
+data/raw/*.db
+data/backups/
+
 # MLflow
 mlruns/
 mlartifacts/

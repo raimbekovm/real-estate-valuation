@@ -363,6 +363,13 @@ class HouseKGScraper:
         if id_match:
             data['listing_id'] = id_match.group(1)
 
+        # Жилой комплекс (ЖК) - ищем ссылку на /jilie-kompleksy/
+        jk_link = soup.find('a', href=re.compile(r'/jilie-kompleksy/'))
+        if jk_link:
+            jk_name = jk_link.get('title') or jk_link.get_text(strip=True)
+            if jk_name:
+                data['residential_complex'] = jk_name
+
         return data
 
     def get_total_pages(self):

@@ -6,6 +6,7 @@
 - Экспоненциальный backoff при ошибках
 - Случайный порядок страниц
 - Увеличенные случайные паузы
+- Многопоточный парсинг (--workers N)
 """
 
 import requests
@@ -21,6 +22,8 @@ from pathlib import Path
 from tqdm import tqdm
 from fake_useragent import UserAgent
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 logging.basicConfig(
     level=logging.INFO,
@@ -243,6 +246,7 @@ class KrishaSeleniumScraper:
 
         # База данных для URL (общая с обычным парсером)
         self.db_path = Path(__file__).parent.parent.parent / 'data' / 'raw' / f'krisha_kz_{self.city}_urls.db'
+        self._db_lock = threading.Lock()
         self._init_db()
 
     def _init_db(self):
@@ -258,9 +262,37 @@ class KrishaSeleniumScraper:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Добавляем колонку worker_id если её нет (для параллельной обработки)
+        try:
+            cursor.execute('ALTER TABLE urls ADD COLUMN worker_id INTEGER DEFAULT NULL')
+        except sqlite3.OperationalError:
+            pass  # Колонка уже существует
+        # Сбрасываем зависшие задачи (worker_id != NULL но parsed = 0)
+        cursor.execute('UPDATE urls SET worker_id = NULL WHERE parsed = 0 AND worker_id IS NOT NULL')
         conn.commit()
         conn.close()
         logger.info(f"БД инициализирована: {self.db_path}")
+
+    def _claim_urls_batch(self, worker_id, batch_size=100):
+        """Захватить батч URL для обработки воркером"""
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            # Захватываем URL которые не обработаны и не заняты другим воркером
+            cursor.execute('''
+                UPDATE urls SET worker_id = ?
+                WHERE id IN (
+                    SELECT id FROM urls
+                    WHERE parsed = 0 AND worker_id IS NULL
+                    LIMIT ?
+                )
+            ''', (worker_id, batch_size))
+            conn.commit()
+            # Получаем захваченные URL
+            cursor.execute('SELECT url FROM urls WHERE worker_id = ? AND parsed = 0', (worker_id,))
+            urls = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            return urls
 
     def _save_urls_to_db(self, urls):
         """Сохранение URL в базу данных"""
@@ -685,6 +717,251 @@ class KrishaSeleniumScraper:
         finally:
             self.driver_manager.stop()
 
+        return self.data
+
+    def _worker_parse(self, worker_id, pbar, results_list, results_lock):
+        """Воркер для параллельного парсинга"""
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+
+        def start_driver():
+            d = SeleniumDriver(headless=self.headless)
+            d.start()
+            return d
+
+        driver = start_driver()
+
+        try:
+            while True:
+                # Захватываем батч URL
+                urls = self._claim_urls_batch(worker_id, batch_size=50)
+                if not urls:
+                    logger.info(f"Воркер {worker_id}: нет больше URL")
+                    break
+
+                logger.info(f"Воркер {worker_id}: захватил {len(urls)} URL")
+
+                for url in urls:
+                    try:
+                        # Парсим с коротким таймаутом
+                        html = driver.get(url, wait_time=5, max_retries=1)
+                        time.sleep(0.3)
+                        html = driver.driver.page_source
+
+                        soup = BeautifulSoup(html, 'lxml')
+                        data = self._parse_listing_html(url, html, soup)
+
+                        if data:
+                            with results_lock:
+                                results_list.append(data)
+                            self._mark_url_parsed(url)
+
+                        consecutive_errors = 0
+                        pbar.update(1)
+
+                        # Задержка для избежания блокировки
+                        time.sleep(random.uniform(1.5, 3.0))
+
+                    except Exception as e:
+                        consecutive_errors += 1
+                        logger.warning(f"Воркер {worker_id} ошибка #{consecutive_errors}: {type(e).__name__}")
+                        pbar.update(1)
+
+                        # Перезапуск браузера при серии ошибок
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.warning(f"Воркер {worker_id}: перезапуск браузера")
+                            try:
+                                driver.stop()
+                            except:
+                                pass
+                            time.sleep(2)
+                            driver = start_driver()
+                            consecutive_errors = 0
+
+                # Сохраняем промежуточные результаты
+                with results_lock:
+                    if len(results_list) % 100 == 0:
+                        self.data = list(results_list)
+                        self._save_intermediate()
+
+        finally:
+            try:
+                driver.stop()
+            except:
+                pass
+            logger.info(f"Воркер {worker_id} завершён")
+
+    def _parse_listing_html(self, url, html, soup):
+        """Парсинг HTML страницы объявления (вынесено для переиспользования)"""
+        data = {
+            'url': url,
+            'parsed_at': datetime.now().isoformat(),
+            'source': 'krisha.kz'
+        }
+
+        # ID из URL
+        id_match = re.search(r'/a/show/(\d+)', url)
+        if id_match:
+            data['listing_id'] = id_match.group(1)
+
+        # Цена
+        price_elem = soup.find(class_='offer__price')
+        if price_elem:
+            price_text = re.sub(r'[\s\xa0]+', '', price_elem.get_text())
+            price_match = re.search(r'(\d+)', price_text)
+            if price_match:
+                data['price_kzt'] = int(price_match.group(1))
+                data['price_usd'] = int(data['price_kzt'] * self.KZT_TO_USD)
+
+        # Заголовок (комнаты, площадь)
+        title = soup.find('h1')
+        if title:
+            title_text = title.get_text(strip=True)
+            rooms_match = re.search(r'(\d+)-комн', title_text)
+            if rooms_match:
+                data['rooms'] = int(rooms_match.group(1))
+            area_match = re.search(r'([\d.,]+)\s*м', title_text)
+            if area_match:
+                data['area'] = float(area_match.group(1).replace(',', '.'))
+
+        # Парсинг offer__info-item
+        for item in soup.find_all(class_='offer__info-item'):
+            data_name = item.get('data-name', '')
+            title_elem = item.find(class_='offer__info-title')
+            value_elem = item.find(class_='offer__advert-short-info')
+            if not value_elem:
+                value_elem = item.find(class_='offer__location')
+
+            if not title_elem or not value_elem:
+                continue
+
+            value = value_elem.get_text(strip=True)
+            col_name = self.DATA_NAME_MAP.get(data_name)
+
+            if data_name == 'flat.floor' or col_name == 'floor_info':
+                floor_match = re.search(r'(\d+)\s*из\s*(\d+)', value)
+                if floor_match:
+                    data['floor'] = int(floor_match.group(1))
+                    data['total_floors'] = int(floor_match.group(2))
+            elif data_name == 'house.year':
+                year_match = re.search(r'(\d{4})', value)
+                if year_match:
+                    data['year_built'] = int(year_match.group(1))
+            elif data_name == 'live.square' or col_name == 'area_info':
+                area_match = re.search(r'^([\d.,]+)', value)
+                if area_match:
+                    data['area'] = float(area_match.group(1).replace(',', '.'))
+                kitchen_match = re.search(r'кухн[яи]\s*[—-]?\s*([\d.,]+)', value)
+                if kitchen_match:
+                    data['kitchen_area'] = float(kitchen_match.group(1).replace(',', '.'))
+                living_match = re.search(r'жил[ая\.]+\s*[—-]?\s*([\d.,]+)', value)
+                if living_match:
+                    data['living_area'] = float(living_match.group(1).replace(',', '.'))
+            elif not data_name:
+                title_text = title_elem.get_text(strip=True).lower()
+                if 'город' in title_text:
+                    clean_value = re.sub(r'показать на карте', '', value).strip()
+                    data['city'] = clean_value
+                    parts = clean_value.split(',')
+                    if len(parts) >= 2:
+                        data['district'] = parts[1].strip()
+                    if len(parts) >= 3:
+                        data['address'] = ', '.join(parts[2:]).strip()
+            elif col_name:
+                data[col_name] = value
+            else:
+                title_text = title_elem.get_text(strip=True).lower()
+                if title_text and len(title_text) < 50:
+                    raw_col = f'raw_{title_text.replace(" ", "_")[:30]}'
+                    data[raw_col] = value
+
+        # Парсинг offer__parameters dl
+        params_section = soup.find(class_='offer__parameters')
+        if params_section:
+            for dl in params_section.find_all('dl'):
+                dt = dl.find('dt')
+                dd = dl.find('dd')
+                if not dt or not dd:
+                    continue
+
+                data_name = dt.get('data-name', '')
+                value = dd.get_text(strip=True)
+                col_name = self.DATA_NAME_MAP.get(data_name)
+
+                if col_name == 'ceiling_height':
+                    height_match = re.search(r'([\d.,]+)', value)
+                    if height_match:
+                        data['ceiling_height'] = float(height_match.group(1).replace(',', '.'))
+                elif col_name:
+                    data[col_name] = value
+                else:
+                    title_text = dt.get_text(strip=True).lower()
+                    if title_text and len(title_text) < 50:
+                        raw_col = f'raw_{title_text.replace(" ", "_")[:30]}'
+                        data[raw_col] = value
+
+        # Адрес из JSON
+        address_match = re.search(r'"addressTitle"\s*:\s*"([^"]+)"', html)
+        if address_match:
+            data['address'] = address_match.group(1)
+
+        # Координаты
+        lat, lon = None, None
+        lat_match = re.search(r'"lat"\s*:\s*([\d.]+)', html)
+        lon_match = re.search(r'"lon"\s*:\s*([\d.]+)', html)
+        if lat_match and lon_match:
+            lat = float(lat_match.group(1))
+            lon = float(lon_match.group(1))
+
+        if not lat:
+            lat_match = re.search(r'latitude["\s:]+(\d+\.\d+)', html)
+            lon_match = re.search(r'longitude["\s:]+(\d+\.\d+)', html)
+            if lat_match and lon_match:
+                lat = float(lat_match.group(1))
+                lon = float(lon_match.group(1))
+
+        if lat and lon and 40 < lat < 60 and 50 < lon < 90:
+            data['latitude'] = lat
+            data['longitude'] = lon
+
+        # Цена за м²
+        if data.get('price_kzt') and data.get('area'):
+            data['price_per_m2_kzt'] = int(data['price_kzt'] / data['area'])
+
+        return data if data.get('price_kzt') else None
+
+    def scrape_parallel(self, num_workers=3, resume=True):
+        """Параллельный парсинг несколькими воркерами"""
+        if resume:
+            self.load_progress()
+
+        total_in_db, parsed_in_db = self._get_db_stats()
+        remaining = total_in_db - parsed_in_db
+        logger.info(f"В БД: {total_in_db} URL, обработано: {parsed_in_db}, осталось: {remaining}")
+
+        if remaining == 0:
+            logger.info("Все URL обработаны!")
+            return self.data
+
+        results_list = list(self.data)  # Копируем существующие данные
+        results_lock = threading.Lock()
+
+        with tqdm(total=remaining, desc=f"Парсинг ({num_workers} воркеров)") as pbar:
+            threads = []
+            for worker_id in range(num_workers):
+                t = threading.Thread(
+                    target=self._worker_parse,
+                    args=(worker_id, pbar, results_list, results_lock)
+                )
+                t.start()
+                threads.append(t)
+                time.sleep(2)  # Небольшая задержка между запуском воркеров
+
+            for t in threads:
+                t.join()
+
+        self.data = results_list
+        self._save_intermediate()
         return self.data
 
 
@@ -1437,6 +1714,8 @@ def main():
                         help='Показывать браузер (только с --selenium)')
     parser.add_argument('--collect-only', action='store_true',
                         help='Только собрать URL без парсинга')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Количество параллельных воркеров (только с --selenium)')
     args = parser.parse_args()
 
     print(f"Запуск парсера krisha.kz ({args.city.capitalize()})...")
@@ -1451,10 +1730,17 @@ def main():
         )
         print(f"  Режим: Selenium ({'headless' if headless else 'видимый'})")
         print(f"  Задержка: {args.delay_min}-{args.delay_max} сек")
+        if args.workers > 1:
+            print(f"  Воркеров: {args.workers} (параллельный режим)")
         if args.resume:
             print("  Режим возобновления: да")
 
-        scraper.scrape(max_pages=args.max_pages, save_every=50, resume=args.resume, collect_only=args.collect_only)
+        if args.workers > 1 and not args.collect_only:
+            # Параллельный парсинг
+            scraper.scrape_parallel(num_workers=args.workers, resume=args.resume)
+        else:
+            scraper.scrape(max_pages=args.max_pages, save_every=50, resume=args.resume, collect_only=args.collect_only)
+
         if not args.collect_only:
             filepath = scraper.save()
     else:
