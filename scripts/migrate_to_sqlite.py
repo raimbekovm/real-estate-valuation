@@ -188,6 +188,105 @@ def verify_migration(db: RealEstateDB, original_count: int) -> bool:
     return success
 
 
+def migrate_krisha_raw(db: RealEstateDB, csv_path: str) -> int:
+    """
+    Миграция данных krisha.kz (Астана/Алматы).
+
+    Args:
+        db: Экземпляр RealEstateDB
+        csv_path: Путь к CSV файлу
+
+    Returns:
+        Количество добавленных записей
+    """
+    logger.info(f"Загрузка данных из {csv_path}")
+    df = pd.read_csv(csv_path)
+    logger.info(f"Загружено {len(df)} записей")
+
+    # Маппинг колонок krisha.kz CSV -> SQLite
+    column_mapping = {
+        'url': 'url',
+        'parsed_at': 'parsed_at',
+        'listing_id': 'listing_id',
+        'rooms': 'rooms',
+        'area': 'area',
+        'price_usd': 'price_usd',
+        # price_kzt не в схеме, используем только price_usd
+        'price_per_m2_kzt': 'price_per_m2',
+        'house_type': 'house_type',
+        'year_built': 'year_built',
+        'floor': 'floor',
+        'total_floors': 'total_floors',
+        'living_area': 'living_area',
+        'kitchen_area': 'kitchen_area',
+        'condition': 'condition',
+        'internet': 'internet',
+        'bathroom': 'bathroom',
+        'balcony': 'balcony',
+        'parking': 'parking',
+        'furniture': 'furniture',
+        'floor_type': 'floor_type',
+        'security': 'security',
+        'ceiling_height': 'ceiling_height',
+        'address': 'address',
+        'district': 'district',
+        'latitude': 'latitude',
+        'longitude': 'longitude',
+        'raw_жилой_комплекс': 'residential_complex_name',
+    }
+
+    count = 0
+    errors = 0
+
+    for idx, row in df.iterrows():
+        try:
+            data = {}
+
+            for csv_col, db_col in column_mapping.items():
+                if csv_col in row.index:
+                    data[db_col] = clean_value(row[csv_col])
+
+            # Извлекаем listing_id из URL если нет
+            if not data.get('listing_id') and data.get('url'):
+                data['listing_id'] = extract_listing_id_from_url(data['url'])
+
+            if not data.get('listing_id'):
+                continue
+
+            # Источник
+            data['source'] = 'krisha.kz'
+
+            # Конвертируем числовые поля
+            for field in ['rooms', 'floor', 'total_floors', 'year_built', 'price_usd', 'price_per_m2']:
+                if data.get(field) is not None:
+                    try:
+                        data[field] = int(data[field])
+                    except (ValueError, TypeError):
+                        data[field] = None
+
+            for field in ['area', 'living_area', 'kitchen_area', 'latitude', 'longitude', 'ceiling_height']:
+                if data.get(field) is not None:
+                    try:
+                        data[field] = float(data[field])
+                    except (ValueError, TypeError):
+                        data[field] = None
+
+            # Добавляем в БД
+            db.add_apartment(data)
+            count += 1
+
+            if count % 2000 == 0:
+                logger.info(f"Обработано {count} записей...")
+
+        except Exception as e:
+            errors += 1
+            if errors <= 10:
+                logger.warning(f"Ошибка в строке {idx}: {e}")
+
+    logger.info(f"Миграция завершена: {count} записей добавлено, {errors} ошибок")
+    return count
+
+
 def main():
     """Основная функция миграции."""
     import argparse
@@ -209,7 +308,6 @@ def main():
 
     if args.city == 'bishkek':
         if args.source == 'raw':
-            # Используем последний сырой файл
             raw_files = list((data_dir / 'raw').glob('house_kg_bishkek_2*.csv'))
             if not raw_files:
                 logger.error("Не найдены сырые файлы Бишкека")
@@ -217,8 +315,24 @@ def main():
             csv_path = max(raw_files, key=lambda f: f.stat().st_mtime)
         else:
             csv_path = data_dir / 'processed' / 'bishkek_clean.csv'
+    elif args.city == 'astana':
+        # Используем последний сырой файл krisha.kz
+        raw_files = list((data_dir / 'raw').glob('krisha_kz_astana_2*.csv'))
+        # Исключаем intermediate файлы
+        raw_files = [f for f in raw_files if 'intermediate' not in f.name]
+        if not raw_files:
+            logger.error("Не найдены сырые файлы Астаны")
+            return
+        csv_path = max(raw_files, key=lambda f: f.stat().st_mtime)
+    elif args.city == 'almaty':
+        raw_files = list((data_dir / 'raw').glob('krisha_kz_almaty_2*.csv'))
+        raw_files = [f for f in raw_files if 'intermediate' not in f.name]
+        if not raw_files:
+            logger.error("Не найдены сырые файлы Алматы")
+            return
+        csv_path = max(raw_files, key=lambda f: f.stat().st_mtime)
     else:
-        logger.error(f"Миграция для {args.city} пока не реализована")
+        logger.error(f"Неизвестный город: {args.city}")
         return
 
     if not csv_path.exists():
@@ -248,8 +362,12 @@ def main():
                 logger.info("Миграция отменена")
                 return
 
-        # Миграция
-        count = migrate_bishkek_raw(db, str(csv_path))
+        # Миграция - выбираем функцию в зависимости от источника
+        if args.city == 'bishkek':
+            count = migrate_bishkek_raw(db, str(csv_path))
+        else:
+            # Астана и Алматы используют krisha.kz
+            count = migrate_krisha_raw(db, str(csv_path))
 
         # Проверка
         verify_migration(db, original_count)
