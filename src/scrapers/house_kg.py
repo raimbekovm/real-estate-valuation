@@ -429,7 +429,69 @@ class HouseKGScraper:
             data['photo_urls'] = None
             data['photo_count'] = 0
 
+        # Описание от продавца
+        description = self._parse_description(soup)
+        if description:
+            data['description'] = description
+
         return data
+
+    def _parse_description(self, soup):
+        """Извлечение описания от продавца"""
+        description = None
+
+        # Паттерн 1: ищем секцию "Описание от продавца" или похожую
+        for section in soup.find_all(['div', 'section']):
+            # Проверяем заголовок секции
+            header = section.find(['h2', 'h3', 'h4', 'strong'])
+            if header and 'описание' in header.get_text().lower():
+                # Берём текст после заголовка
+                text_parts = []
+                for sibling in header.find_next_siblings():
+                    if sibling.name in ['h2', 'h3', 'h4', 'div']:
+                        # Следующая секция - прекращаем
+                        if sibling.find(['h2', 'h3', 'h4', 'strong']):
+                            break
+                    text = sibling.get_text(strip=True)
+                    if text and len(text) > 10:
+                        text_parts.append(text)
+                if text_parts:
+                    description = ' '.join(text_parts)
+                    break
+
+        # Паттерн 2: ищем элемент с классом содержащим 'description' или 'text'
+        if not description:
+            for cls_pattern in ['description', 'text-content', 'details-text', 'offer-text']:
+                elem = soup.find(class_=re.compile(cls_pattern, re.I))
+                if elem:
+                    text = elem.get_text(strip=True)
+                    if text and len(text) > 50:
+                        description = text
+                        break
+
+        # Паттерн 3: ищем большой блок текста в details секции
+        if not description:
+            details = soup.find(class_=re.compile(r'details', re.I))
+            if details:
+                # Ищем параграф или div с длинным текстом
+                for elem in details.find_all(['p', 'div']):
+                    text = elem.get_text(strip=True)
+                    # Описание обычно длинное (>100 символов) и содержит предложения
+                    if text and len(text) > 100 and '.' in text:
+                        # Исключаем технические тексты
+                        if not any(skip in text.lower() for skip in ['cookie', 'javascript', 'загрузка']):
+                            description = text
+                            break
+
+        # Очистка описания
+        if description:
+            # Убираем лишние пробелы и переносы строк
+            description = ' '.join(description.split())
+            # Ограничиваем длину (для БД)
+            if len(description) > 5000:
+                description = description[:5000] + '...'
+
+        return description
 
     def get_total_pages(self):
         """Определение общего количества страниц через бинарный поиск"""
