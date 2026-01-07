@@ -27,6 +27,7 @@ class HouseKGScraper:
     """Парсер для сбора данных о недвижимости с house.kg"""
 
     BASE_URL = "https://www.house.kg"
+    CDN_URL = "https://cdn.house.kg"
 
     # Доступные города (town ID)
     CITIES = {
@@ -37,7 +38,7 @@ class HouseKGScraper:
         'tokmok': 3,
     }
 
-    def __init__(self, city='bishkek', delay_range=(1, 3)):
+    def __init__(self, city='bishkek', delay_range=(1, 3), download_photos=False, photos_dir=None):
         self.city = city.lower()
         if self.city not in self.CITIES:
             raise ValueError(f"Неизвестный город: {city}. Доступные: {list(self.CITIES.keys())}")
@@ -48,6 +49,16 @@ class HouseKGScraper:
         self.session = requests.Session()
         self.data = []
         self.parsed_ids = set()
+
+        # Настройки скачивания фото
+        self.download_photos = download_photos
+        if photos_dir:
+            self.photos_dir = Path(photos_dir)
+        else:
+            self.photos_dir = Path(__file__).parent.parent.parent / 'data' / 'images' / self.city
+        if self.download_photos:
+            self.photos_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Фото будут сохраняться в: {self.photos_dir}")
 
     def _get_latest_intermediate_file(self):
         """Получение последнего промежуточного файла"""
@@ -429,6 +440,11 @@ class HouseKGScraper:
                 photo_urls = photo_urls[:-1]
             data['photo_urls'] = json.dumps(photo_urls, ensure_ascii=False)
             data['photo_count'] = len(photo_urls)
+
+            # Скачиваем фото если включено
+            if self.download_photos and data.get('listing_id'):
+                downloaded = self._download_photos(data['listing_id'], photo_urls)
+                data['photos_downloaded'] = downloaded
         else:
             data['photo_urls'] = None
             data['photo_count'] = 0
@@ -496,6 +512,48 @@ class HouseKGScraper:
                 description = description[:5000] + '...'
 
         return description
+
+    def _download_photos(self, listing_id, photo_urls):
+        """
+        Скачивание фотографий с CDN.
+        CDN (cdn.house.kg) отдельный от основного сайта, менее строгий к запросам.
+        """
+        if not photo_urls or not self.download_photos:
+            return 0
+
+        listing_dir = self.photos_dir / listing_id
+        listing_dir.mkdir(parents=True, exist_ok=True)
+
+        downloaded = 0
+        for i, url in enumerate(photo_urls):
+            try:
+                # Проверяем, не скачано ли уже
+                filename = f"{i+1:02d}.jpg"
+                filepath = listing_dir / filename
+                if filepath.exists():
+                    downloaded += 1
+                    continue
+
+                # Скачиваем с CDN (отдельная сессия, без cookies основного сайта)
+                response = requests.get(
+                    url,
+                    headers={'User-Agent': self.ua.random},
+                    timeout=15
+                )
+                response.raise_for_status()
+
+                # Сохраняем
+                with open(filepath, 'wb') as f:
+                    f.write(response.content)
+                downloaded += 1
+
+                # Небольшая задержка между фото (CDN толерантен, но лучше не спамить)
+                time.sleep(random.uniform(0.3, 0.7))
+
+            except Exception as e:
+                logger.warning(f"Не удалось скачать фото {i+1} для {listing_id}: {e}")
+
+        return downloaded
 
     def get_total_pages(self):
         """Определение общего количества страниц через бинарный поиск"""
