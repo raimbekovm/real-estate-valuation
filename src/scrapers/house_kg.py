@@ -14,6 +14,7 @@ from pathlib import Path
 from tqdm import tqdm
 from fake_useragent import UserAgent
 import logging
+from urllib.parse import urljoin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -229,6 +230,55 @@ class HouseKGScraper:
                     clean_value = ' '.join(value.split())
                     data[col_name] = clean_value
 
+    def _parse_photos(self, soup):
+        """Извлечение URL фотографий из галереи (только фото квартиры)"""
+        photo_urls = []
+
+        def is_apartment_photo(url):
+            """Проверка что это фото квартиры, а не реклама/ЖК"""
+            # Исключаем фото ЖК и рекламные баннеры
+            exclude_patterns = [
+                '/building-images/',  # Фото ЖК
+                '/banners/',          # Рекламные баннеры
+                '/logos/',            # Логотипы
+                '/avatars/',          # Аватары пользователей
+            ]
+            return all(pattern not in url for pattern in exclude_patterns)
+
+        # Паттерн 1: ссылки на cdn.house.kg (основной)
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if 'cdn.house.kg' in href and '/images/' in href:
+                if href not in photo_urls and is_apartment_photo(href):
+                    photo_urls.append(href)
+
+        # Паттерн 2: img теги с src на cdn.house.kg
+        for img in soup.find_all('img', src=True):
+            src = img['src']
+            if 'cdn.house.kg' in src and '/images/' in src:
+                # Пытаемся получить full-size версию
+                full_src = re.sub(r'_\d+x\d+\.', '_1200x900.', src)
+                if full_src not in photo_urls and is_apartment_photo(full_src):
+                    photo_urls.append(full_src)
+
+        # Паттерн 3: data-src атрибуты (lazy loading)
+        for elem in soup.find_all(attrs={'data-src': True}):
+            data_src = elem['data-src']
+            if 'cdn.house.kg' in data_src and '/images/' in data_src:
+                if data_src not in photo_urls and is_apartment_photo(data_src):
+                    photo_urls.append(data_src)
+
+        # Паттерн 4: фон элементов style="background-image: url(...)"
+        for elem in soup.find_all(style=True):
+            style = elem['style']
+            bg_match = re.search(r'url\(["\']?(https?://cdn\.house\.kg[^"\')\s]+)["\']?\)', style)
+            if bg_match:
+                url = bg_match.group(1)
+                if url not in photo_urls and is_apartment_photo(url):
+                    photo_urls.append(url)
+
+        return photo_urls
+
     def _label_to_column(self, label):
         """Преобразование русского label в имя колонки"""
         # Маппинг русских названий в английские snake_case
@@ -369,6 +419,15 @@ class HouseKGScraper:
             jk_name = jk_link.get('title') or jk_link.get_text(strip=True)
             if jk_name:
                 data['residential_complex'] = jk_name
+
+        # Фотографии
+        photo_urls = self._parse_photos(soup)
+        if photo_urls:
+            data['photo_urls'] = json.dumps(photo_urls, ensure_ascii=False)
+            data['photo_count'] = len(photo_urls)
+        else:
+            data['photo_urls'] = None
+            data['photo_count'] = 0
 
         return data
 
