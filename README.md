@@ -2,46 +2,62 @@
 
 Machine learning models for property price prediction in emerging Central Asian markets (Kyrgyzstan, Kazakhstan).
 
-## Research Question
+## Current Results
 
-How do gradient boosting models perform on small emerging real estate markets compared to established markets, and what adaptations are necessary?
+**Bishkek Model v3** (January 2026):
+
+| Metric | Value |
+|--------|-------|
+| MAE | $144/m² |
+| MedAPE | 7.0% |
+| R² | 0.66 |
+| Within 10% | 64% |
+
+Kaggle notebook: [bishkek-real-estate-price-prediction-v3](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3)
+
+## Features
+
+- **Data Collection**: Scraping from house.kg (Bishkek) and krisha.kz (Almaty, Astana)
+- **Photo Scraping**: Download apartment photos for computer vision features
+- **Rich Features**: 50+ features including spatial lag, H3 tiles, market trends, POI distances
+- **Ensemble Model**: Stacking (XGBoost + LightGBM + CatBoost)
+- **Kaggle Integration**: Upload datasets with photos directly to Kaggle
 
 ## Project Structure
 
 ```
 real-estate-valuation/
-├── configs/                 # Configuration files
-│   └── config.yaml
 ├── data/
-│   ├── raw/                # Raw scraped data
-│   ├── processed/          # Cleaned and feature-engineered data
-│   └── external/           # External datasets (Ames, etc.)
-├── notebooks/              # Jupyter notebooks for EDA
+│   ├── raw/                 # Raw scraped CSV data
+│   ├── images/              # Downloaded apartment photos
+│   │   └── bishkek/         # Photos by listing_id
+│   └── kaggle_upload/       # Prepared dataset for Kaggle
+├── notebooks/
+│   └── bishkek_model_training_v3.ipynb  # Main training notebook
 ├── src/
-│   ├── scrapers/           # Data collection scripts
-│   ├── preprocessing/      # Data cleaning and feature engineering
-│   ├── models/             # Model training and evaluation
-│   └── analysis/           # Results analysis and visualization
-├── tests/                  # Unit tests
-├── pyproject.toml          # Project configuration
-├── Makefile               # Automation commands
+│   ├── scrapers/
+│   │   ├── house_kg.py      # house.kg scraper (Kyrgyzstan)
+│   │   └── krisha_kz.py     # krisha.kz scraper (Kazakhstan)
+│   └── features/
+│       └── advanced_features.py  # Feature engineering classes
+├── scripts/
+│   ├── enrich_listings.py   # Add photos & descriptions to existing data
+│   └── upload_to_kaggle.py  # Upload dataset to Kaggle
+├── docs/
+│   └── experiments/         # Research and experiment logs
 └── README.md
 ```
 
 ## Installation
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/real-estate-valuation.git
+git clone https://github.com/raimbekovm/real-estate-valuation.git
 cd real-estate-valuation
 
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or .venv\Scripts\activate  # Windows
+source .venv/bin/activate
 
-# Install dependencies
-make install-dev
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -49,43 +65,90 @@ make install-dev
 ### Data Collection
 
 ```bash
-# Scrape data from house.kg
-make scrape
+# Scrape Bishkek listings (house.kg)
+python -m src.scrapers.house_kg
 
-# Test scrape (2 pages only)
-make scrape-test
+# Scrape with photo downloading
+python -c "
+from src.scrapers.house_kg import HouseKGScraper
+scraper = HouseKGScraper(download_photos=True)
+scraper.scrape(max_pages=10)
+scraper.save()
+"
 ```
 
-### Training
+### Enrich Existing Data
+
+Add photos and descriptions to already scraped listings:
 
 ```bash
-# Full pipeline
-make experiment
+# Single thread (safe)
+python scripts/enrich_listings.py --csv data/raw/listings.csv
 
-# Or step by step
-make preprocess
-make train
+# Multi-threaded (faster)
+python scripts/enrich_listings.py --csv data/raw/listings.csv --workers 2
 ```
 
-## Models
+### Upload to Kaggle
 
-- **Baseline**: Linear Regression, Ridge, Lasso, ElasticNet
-- **Tree-based**: Random Forest, Extra Trees
-- **Boosting**: XGBoost, LightGBM, CatBoost
+```bash
+# Prepare and upload dataset with photos
+python scripts/upload_to_kaggle.py --csv data/raw/listings.csv --images data/images/bishkek
 
-## Metrics
+# Or full pipeline: scrape + upload
+python scripts/upload_to_kaggle.py --scrape --max-pages 100
+```
 
-- MAE (Mean Absolute Error) - primary
-- RMSE (Root Mean Squared Error)
-- MAPE (Mean Absolute Percentage Error)
-- R² (Coefficient of Determination)
+### Train Model
+
+Run the Kaggle notebook locally or on Kaggle:
+
+```bash
+cd notebooks
+kaggle kernels push -p .
+kaggle kernels status muraraimbekov/bishkek-real-estate-price-prediction-v3
+```
 
 ## Data Sources
 
-| Source | Region | Records |
-|--------|--------|---------|
-| house.kg | Bishkek, Kyrgyzstan | ~10K |
-| krisha.kz | Almaty, Kazakhstan | ~15K |
+| Source | Region | Records | Photos |
+|--------|--------|---------|--------|
+| [house.kg](https://house.kg) | Bishkek, Kyrgyzstan | ~10K | ~70K |
+| [krisha.kz](https://krisha.kz) | Almaty, Kazakhstan | ~15K | TBD |
+
+**Kaggle Dataset**: [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025)
+
+## Model Architecture
+
+```
+Features (50+)
+    ├── Basic: rooms, area, floor, year_built
+    ├── Condition: condition_score, ceiling_height, bathroom_type
+    ├── Location: district, latitude, longitude
+    ├── POI Distances: center, malls, parks, bazaars, transport
+    ├── Spatial Lag: neighbor_price_mean, neighbor_count (500m radius)
+    ├── H3 Tiles: res7, res8, res9 encoded
+    ├── Market Trends: district_price_30/60/90d rolling means
+    └── Density: listings_500m, listings_1000m
+
+Ensemble (Stacking)
+    ├── XGBoost
+    ├── LightGBM
+    ├── CatBoost
+    └── Ridge (meta-learner)
+```
+
+## Roadmap
+
+- [x] Phase 1: Spatial features (H3, neighbor prices, density)
+- [ ] Phase 2: Computer vision (photo-based quality scoring)
+- [ ] Phase 3: Multi-city training (Bishkek + Almaty combined)
+- [ ] Production API for real-time valuation
+
+## Research
+
+See [docs/experiments/](docs/experiments/) for detailed research notes:
+- `2026-01-07_model_improvement_research.md` - Analysis of top models and improvement roadmap
 
 ## License
 
