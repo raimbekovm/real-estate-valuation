@@ -4,7 +4,7 @@ Machine learning models for property price prediction in emerging Central Asian 
 
 ## Current Results
 
-**Bishkek Model v3** (January 2026):
+### Bishkek (house.kg)
 
 | Metric | Value |
 |--------|-------|
@@ -13,7 +13,20 @@ Machine learning models for property price prediction in emerging Central Asian 
 | R² | 0.66 |
 | Within 10% | 64% |
 
-Kaggle notebook: [bishkek-real-estate-price-prediction-v3](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3)
+Kaggle: [bishkek-real-estate-price-prediction-v3](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3)
+
+### Astana (krisha.kz)
+
+| Metric | Value |
+|--------|-------|
+| MAE | 56,563 ₸/m² |
+| MAPE | 9.0% |
+| R² | **0.83** |
+| Records | 18,293 |
+
+Key insight: Residential complex name (`raw_жилой_комплекс`) contributes **41%** of prediction power.
+
+Kaggle: [astana-real-estate-price-prediction](https://www.kaggle.com/code/muraraimbekov/astana-real-estate-price-prediction)
 
 ## Features
 
@@ -111,12 +124,14 @@ kaggle kernels status muraraimbekov/bishkek-real-estate-price-prediction-v3
 
 ## Data Sources
 
-| Source | Region | Records | Photos |
-|--------|--------|---------|--------|
-| [house.kg](https://house.kg) | Bishkek, Kyrgyzstan | ~10K | ~70K |
-| [krisha.kz](https://krisha.kz) | Almaty, Kazakhstan | ~15K | TBD |
+| Source | Region | Records | Photos | Status |
+|--------|--------|---------|--------|--------|
+| [house.kg](https://house.kg) | Bishkek, Kyrgyzstan | ~10K | ~70K | Ready |
+| [krisha.kz](https://krisha.kz) | Astana, Kazakhstan | ~22K | TBD | Collected |
+| [krisha.kz](https://krisha.kz) | Almaty, Kazakhstan | TBD | TBD | Needs VPN |
 
-**Kaggle Dataset**: [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025)
+**Kaggle Datasets**:
+- [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025) - Bishkek with photos
 
 ## Model Architecture
 
