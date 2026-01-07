@@ -19,11 +19,22 @@ This document presents a comprehensive analysis of state-of-the-art techniques u
 | R² Score | 0.668 | 0.85-0.95 | +0.18 to +0.28 |
 | Within 10% Accuracy | 64.9% | 85-95% | +20% to +30% |
 
-### Recommended Actions
+### Phase 1 Results (Implemented 7 Jan 2026)
 
-1. **Phase 1 (Quick Wins):** Spatial lag, H3 tiles, market trends → Expected improvement: **-2.5% MedAPE**
-2. **Phase 2 (Computer Vision):** Property photo analysis → Expected improvement: **-1.5% MedAPE**
+⚠️ **Phase 1 features did NOT improve metrics as expected.** See [Section 10](#10-phase-1-experiment-results) for detailed analysis.
+
+| Metric | v2 Baseline | v3 (Phase 1) | Change |
+|--------|-------------|--------------|--------|
+| MedAPE | 7.0% | 7.0% | +0.7% |
+| R² | 0.668 | 0.660 | -1.1% |
+| Within 10% | 64.9% | 63.6% | -2.0% |
+
+### Recommended Actions (Updated)
+
+1. ~~**Phase 1 (Quick Wins):** Spatial lag, H3 tiles, market trends → Expected improvement: **-2.5% MedAPE**~~ ✅ Implemented, no improvement
+2. **Phase 2 (Computer Vision):** Property photo analysis → Expected improvement: **-1.5% MedAPE** ⬅️ **Next priority**
 3. **Phase 3 (Advanced ML):** Graph Neural Networks, Attention mechanisms → Expected improvement: **-1% MedAPE**
+4. **Alternative:** More data (Almaty, Astana combined training)
 
 ---
 
@@ -38,6 +49,7 @@ This document presents a comprehensive analysis of state-of-the-art techniques u
 7. [Technical Specifications](#7-technical-specifications)
 8. [Risk Assessment](#8-risk-assessment)
 9. [References](#9-references)
+10. [Phase 1 Experiment Results](#10-phase-1-experiment-results)
 
 ---
 
@@ -903,11 +915,145 @@ See separate file: `benchmarks/run_comparison.py`
 
 ---
 
+---
+
+## 10. Phase 1 Experiment Results
+
+### 10.1 Experiment Overview
+
+**Date:** 7 January 2026
+**Notebook:** `bishkek_model_training_v3.ipynb`
+**Kaggle Kernel:** [bishkek-real-estate-price-prediction-v3](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3)
+
+### 10.2 Implemented Features
+
+All Phase 1 features were implemented as planned:
+
+| Feature Category | Features Added | Implementation |
+|------------------|----------------|----------------|
+| **Spatial Lag** | neighbor_price_mean, neighbor_price_median, neighbor_price_std, neighbor_count | BallTree with 500m radius |
+| **H3 Tiles** | h3_res7_encoded, h3_res8_encoded, h3_res9_encoded | Uber H3 library |
+| **Market Trends** | district_price_30d_mean, district_price_60d_mean, district_price_90d_mean, days_on_market | Rolling window with shift(1) |
+| **Density** | listings_500m, listings_1000m, listings_500m_ratio, listings_1000m_ratio, district_listing_count | BallTree density calculation |
+
+**Total new features:** 16
+
+### 10.3 Results Comparison
+
+| Metric | v2 Baseline | v3 (Phase 1) | Change | Expected |
+|--------|-------------|--------------|--------|----------|
+| MAE | $144/m² | $144/m² | +0.2% | -15% |
+| MedAE | $103/m² | $107/m² | +3.6% | -20% |
+| R² | 0.668 | 0.660 | -1.1% | +0.08 |
+| MedAPE | 7.0% | 7.0% | +0.7% | -2.5% |
+| Within 10% | 64.9% | 63.6% | -2.0% | +15% |
+| CI Coverage | 72.9% | 71.5% | -1.4% | - |
+
+**Result:** ❌ Phase 1 features did NOT improve model performance.
+
+### 10.4 Feature Importance Analysis
+
+Despite no metric improvement, new features contribute **23.5%** of total model importance:
+
+| Rank | Feature | Importance | Is v3 New |
+|------|---------|------------|-----------|
+| 1 | condition_score | 26.4% | No |
+| **2** | **neighbor_price_mean** | **15.1%** | **Yes** |
+| 3 | area | 14.0% | No |
+| 4 | building_age | 4.3% | No |
+| 5 | total_floors | 4.3% | No |
+| 6 | district_target_enc | 4.1% | No |
+| 7 | area_per_room | 3.6% | No |
+| 8 | ceiling_height_m | 2.6% | No |
+| 9 | dist_nearest_park | 2.2% | No |
+| 10 | floor_ratio | 1.9% | No |
+| **11** | **listings_1000m** | **1.6%** | **Yes** |
+| **12** | **neighbor_price_median** | **1.5%** | **Yes** |
+
+**Top v3 features by importance:**
+
+```
+neighbor_price_mean     15.1%
+listings_1000m           1.6%
+neighbor_price_median    1.5%
+neighbor_price_std       0.8%
+h3_res8_encoded          0.5%
+neighbor_count           0.5%
+district_price_30d_mean  0.4%
+district_listing_count   0.3%
+h3_res9_encoded          0.2%
+district_price_60d_mean  0.2%
+```
+
+### 10.5 Data Leakage Incident
+
+⚠️ **Important:** Initial v3 results showed suspiciously good metrics (MedAPE 1.4%, R² 0.967). Investigation revealed **data leakage** in the `price_vs_district_zscore` feature.
+
+**Leaking code (removed):**
+```python
+# BAD: Uses current row's price to calculate zscore
+df['price_vs_district_zscore'] = (df[price_col] - district_mean) / district_std
+```
+
+**Fix applied:**
+- Removed `price_vs_district_zscore` feature entirely
+- Added `shift(1)` to all rolling calculations to prevent using current row
+
+### 10.6 Analysis & Conclusions
+
+#### Why Phase 1 Didn't Improve Metrics
+
+1. **Feature Redundancy**
+   - `neighbor_price_mean` correlates highly with `district_target_enc` (both capture location value)
+   - H3 tiles encode similar information to latitude/longitude
+   - Tree-based models may already capture spatial patterns implicitly
+
+2. **Dataset Size Limitations**
+   - Only ~7,500 samples in Bishkek dataset
+   - H3 resolution 9 creates many sparse tiles
+   - Insufficient data for fine-grained spatial patterns
+
+3. **Market Homogeneity**
+   - Bishkek real estate market may be less spatially heterogeneous than US markets
+   - District-level encoding may be sufficient granularity
+
+4. **Temporal Data Sparsity**
+   - Rolling windows have few data points per district
+   - Market trends require longer historical data
+
+#### Key Insights
+
+1. **Spatial lag works** - `neighbor_price_mean` became the 2nd most important feature
+2. **But it replaces, not complements** - importance shifted from `district_target_enc`, not added to it
+3. **Density features are useful** - `listings_1000m` provides unique signal
+4. **H3 encoding is marginal** - low importance at all resolutions
+
+### 10.7 Recommendations
+
+Based on Phase 1 results, updated priorities:
+
+| Priority | Action | Rationale |
+|----------|--------|-----------|
+| **P0** | **Phase 2: Computer Vision** | Only unexploited data source; research shows 2-3% improvement |
+| **P1** | **More training data** | Combine Almaty + Astana + Bishkek; spatial features need more samples |
+| **P2** | **Feature selection** | Remove redundant v3 features to reduce overfitting |
+| **P3** | **Neural embeddings** | May capture non-linear spatial patterns better than H3 |
+
+### 10.8 Artifacts
+
+- **Model:** `bishkek_model_v3.joblib` (Kaggle output)
+- **Config:** `bishkek_model_v3_config.json`
+- **Notebook:** `notebooks/bishkek_model_training_v3.ipynb`
+- **Kaggle Log:** Available at kernel page
+
+---
+
 ## Document History
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 7 January 2026 | ML Team | Initial research document |
+| 1.1 | 7 January 2026 | ML Team | Added Phase 1 experiment results (Section 10) |
 
 ---
 
