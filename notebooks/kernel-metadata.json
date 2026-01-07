@@ -1,0 +1,14 @@
+{
+  "id": "muraraimbekov/bishkek-real-estate-price-prediction-v2",
+  "title": "Bishkek Real Estate Price Prediction v2",
+  "code_file": "bishkek_model_training_v2.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": ["muraraimbekov/bishkek-real-estate-2025"],
+  "competition_sources": [],
+  "kernel_sources": []
+}

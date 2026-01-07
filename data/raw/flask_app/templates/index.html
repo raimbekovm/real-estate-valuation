@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Прогноз Недвижимости в Астане</title>
+  <link href='https://fonts.googleapis.com/css?family=Pacifico' rel='stylesheet' type='text/css'>
+  <link href='https://fonts.googleapis.com/css?family=Arimo' rel='stylesheet' type='text/css'>
+  <link href='https://fonts.googleapis.com/css?family=Hind:300' rel='stylesheet' type='text/css'>
+  <link href='https://fonts.googleapis.com/css?family=Open+Sans+Condensed:300' rel='stylesheet' type='text/css'>
+  <style>
+    .login {
+        margin: 20px auto;
+        width: 80%;
+        font-family: 'Arimo', sans-serif;
+    }
+
+    .login form {
+        margin-top: 20px;
+    }
+
+    .login form label,
+    .login form select,
+    .login form input {
+        display: block; 
+        margin-bottom: 10px;
+    }
+
+    .login form button {
+        margin-top: 20px;
+    }
+
+    .helper-text {
+        font-size: 0.8em; 
+    }
+
+  </style>
+</head>
+<body>
+<div class="login">
+    <h1>Прогноз Недвижимости в Астане</h1>
+
+    <!-- Main Input For Receiving Query to our ML -->
+    <form action="{{ url_for('predict') }}" method="post">
+        <label for="owner">Выберите ваш статус:</label>
+        <select id="owner" name="owner">
+            <option value="owner">Хозяин недвижимости</option>
+            <option value="agent">Риелтор</option>
+        </select>
+        <label for="complexInput">Название Комплекса:</label>
+        <span class="helper-text">
+            Если год постройки вашего дома ранее 2000 года или ЖК не имеет название, выберите один из вариантов: <br>
+            no name, бережневка, панелька нового типа
+        </span>
+        <input type="text" id="complexInput" name="complex_name" placeholder="Название Комплекса" list="complexList" required="required" autocomplete="off" />
+        <datalist id="complexList"></datalist>
+        <label for="address">Адрес:</label>
+        <span class="helper-text">Пример: Улица Сарайшык, 38</span>
+        <input type="text" name="address" placeholder="Адрес" required />
+        <label for="house_type">Выберите тип дома:</label>
+        <select id="house_type" name="house_type">
+            <option value="monolithic">монолитный</option>
+            <option value="panel">панельный</option>
+            <option value="brick">кирпичный</option>
+        </select>
+        <label for="in_pledge">Выберите наличие залога:</label>
+        <select id="in_pledge" name="in_pledge">
+            <option value="no">Нет</option>
+            <option value="yes">Да</option>
+        </select>
+        <label for="construction_year">Год Постройки:</label>
+        <input type="number" name="construction_year" min="1949" max="2050" placeholder="Год Постройки" required />
+        <label for="ceiling_height">Высота Потолков:</label>
+        <input type="number" name="ceiling_height" min="2" max="5" step="0.01" placeholder="Высота Потолков" required />
+        <label for="bathroom_info">Выберите информацию о ванных комнатах:</label>
+        <select id="bathroom_info" name="bathroom_info">
+            <option value="combined">совмещенный</option>
+            <option value="separate">раздельный</option>
+            <option value="2 or more">2 и более</option>
+        </select>
+        <label for="condition">Выберите состояние недвижимости:</label>
+        <select id="condition" name="condition">
+            <option value="rough">хорошее</option>
+            <option value="average">среднее</option>
+            <option value="good">черновая отделка/требует ремонта</option> 
+        </select>        
+        <label for="area">Площадь (м²):</label>
+        <input type="number" name="area" min="10" max="1000" step="0.01" placeholder="Площадь (м²)" required />
+        <label for="room_count">Количество Комнат:</label>
+        <input type="number" name="room_count" min="1" max="15" placeholder="Количество Комнат" required />
+        <label for="floor">Этаж:</label>
+        <input type="number" name="floor" min="1" max="50" placeholder="Этаж" required />
+        <label for="floor_count">Этажность дома:</label>
+        <input type="number" name="floor_count" min="1" max="50" placeholder="Этажность дома" required />
+        <label for="district">Выберите район:</label>
+        <select id="district" name="district">
+            <option value="almaty">Алматы р-н</option>
+            <option value="esil">Есильский р-н</option>
+            <option value="nura">Нура р-н</option>
+            <option value="saryarka">Сарыарка р-н</option>
+            <option value="baikonur">Байконур р-н</option>
+        </select>        
+        <label for="complex_class">Выберите класс ЖК:</label>
+        <select id="complex_class" name="complex_class">
+            <option value="economy">эконом</option>
+            <option value="comfort">комфорт</option>
+            <option value="business">бизнес</option>
+            <option value="premium">премиум</option>
+        </select>
+        <label for="parking">Выберите тип парковки:</label>
+        <select id="parking" name="parking">
+            <option value="no">нету</option>
+            <option value="underground">подземный</option>
+            <option value="aboveground">надземный (крытый)</option>
+        </select>
+        <label for="elevator">Наличие лифта:</label>
+        <select id="elevator" name="elevator">
+            <option value="yes">есть</option>
+            <option value="no">нету</option>
+        </select>
+        
+        <button type="submit" class="btn btn-primary btn-block btn-large">Предсказать</button>
+    </form>
+
+    <br>
+    <br>
+    {{ prediction_text }}
+
+</div>
+
+<!-- JavaScript for loading data from a CSV file and automatically populating the dropdown list -->
+<script>
+    // A function for reading a CSV file
+    function readCSVFile(filename, callback) {
+        var request = new XMLHttpRequest();
+        request.onload = function() {
+            if (request.status === 200) {
+                callback(request.responseText);
+            }
+        };
+        request.open("GET", filename, true);
+        request.send();
+    }
+
+    // A function for converting CSV content into an array of data
+    function csvToArray(csvData) {
+        var lines = csvData.trim().split('\n');
+        var result = [];
+        for (var i = 0; i < lines.length; i++) {
+            var name = lines[i].trim();
+            if (name) {
+                result.push({ name: name });
+            }
+        }
+        return result;
+    }
+
+    // Loading residential complex (RC) data from a CSV file and populating the datalist element
+    readCSVFile("/data/complexes.csv", function(csvData) {
+    var complexData = csvToArray(csvData);
+    var datalistElement = document.getElementById("complexList");
+    complexData.forEach(function(complex) {
+        var option = document.createElement("option");
+        option.value = complex.name;
+        datalistElement.appendChild(option);
+    });
+});
+</script>
