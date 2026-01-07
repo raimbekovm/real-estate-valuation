@@ -423,6 +423,10 @@ class HouseKGScraper:
         # Фотографии
         photo_urls = self._parse_photos(soup)
         if photo_urls:
+            # Исключаем последнюю фотку - часто это реклама агентства
+            # (только если фото больше 3, чтобы не потерять данные)
+            if len(photo_urls) > 3:
+                photo_urls = photo_urls[:-1]
             data['photo_urls'] = json.dumps(photo_urls, ensure_ascii=False)
             data['photo_count'] = len(photo_urls)
         else:
