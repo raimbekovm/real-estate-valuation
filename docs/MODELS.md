@@ -1,6 +1,76 @@
 # Model Training
 
-## Current Results
+## Current Results (Updated: 2026-01-10)
+
+| Market | Model | MAE | MAPE | MedAPE | R² |
+|--------|-------|-----|------|--------|-----|
+| Bishkek | Ensemble + POI + Optuna | **$121.71/m²** | 7.81% | **5.49%** | **0.76** |
+| Astana | XGBoost | 56,563₸/m² | 9.0% | - | 0.83 |
+
+### Bishkek Model Improvements (2026-01-10)
+
+| Version | MAE | R² | Changes |
+|---------|-----|-----|---------|
+| v1 (baseline) | $144/m² | 0.66 | 22 features, default params |
+| **v3 (current)** | **$121.71/m²** | **0.76** | 39 features, POI, Optuna |
+| Improvement | **-15.5%** | **+15.2%** | |
+
+#### New Features Added (10 POI features)
+- `dist_to_center` - distance to Ala-Too Square
+- `dist_to_bazaars` - nearest bazaar (Osh, Dordoi, Ortosay, Alamedin)
+- `dist_to_parks` - nearest park (5 parks)
+- `dist_to_malls` - nearest mall (Bishkek Park, Dordoi Plaza, Vefa, TSUM)
+- `dist_to_universities` - nearest university (AUCA, KRSU, BGU, KNU)
+- `dist_to_hospitals` - nearest hospital
+- `dist_to_transport` - nearest bus/train station
+- `dist_to_admin` - administrative center (Jogorku Kenesh, Erkindik)
+- `dist_to_premium` - nearest premium zone
+- `is_premium_zone` - binary flag (within 1km of premium zone)
+
+#### Optuna-Optimized Parameters (30 trials)
+```python
+# XGBoost (Best)
+xgb_params = {
+    'n_estimators': 907,
+    'max_depth': 10,
+    'learning_rate': 0.0147,
+    'subsample': 0.893,
+    'colsample_bytree': 0.691,
+    'min_child_weight': 5,
+    'reg_alpha': 0.00157,
+    'reg_lambda': 5.27e-05
+}
+
+# LightGBM
+lgb_params = {
+    'n_estimators': 755,
+    'max_depth': 11,
+    'learning_rate': 0.075,
+    'num_leaves': 50,
+    'subsample': 0.963,
+    'colsample_bytree': 0.609
+}
+
+# CatBoost
+cat_params = {
+    'iterations': 368,
+    'depth': 8,
+    'learning_rate': 0.216,
+    'l2_leaf_reg': 0.825
+}
+```
+
+#### Individual Model Results (After Optuna)
+| Model | MAE | MedAPE | R² |
+|-------|-----|--------|-----|
+| XGBoost | $122.72 | 5.38% | 0.757 |
+| LightGBM | $125.39 | 5.65% | 0.748 |
+| CatBoost | $128.59 | 5.81% | 0.736 |
+| **Ensemble** | **$121.71** | **5.49%** | **0.760** |
+
+---
+
+## Previous Results (Before 2026-01-10)
 
 | Market | Model | MAE | MAPE | R² |
 |--------|-------|-----|------|-----|
@@ -287,4 +357,34 @@ predictions = model.predict(X_new)
 | XGBoost | $150 | 0.63 | 58K₸ | 0.80 |
 | LightGBM | $152 | 0.62 | 59K₸ | 0.79 |
 | CatBoost | $148 | 0.64 | 57K₸ | 0.81 |
-| **Ensemble** | **$144** | **0.66** | **56K₸** | **0.83** |
+| Ensemble (baseline) | $144 | 0.66 | 56K₸ | 0.83 |
+| **Ensemble + POI + Optuna** | **$121.71** | **0.76** | - | - |
+
+## GPU Acceleration
+
+The notebook supports automatic GPU detection on Kaggle:
+
+```python
+# XGBoost 2.0+ GPU
+xgb_params['device'] = 'cuda'
+xgb_params['tree_method'] = 'hist'
+
+# LightGBM GPU
+lgb_params['device'] = 'gpu'
+
+# CatBoost GPU
+cat_params['task_type'] = 'GPU'
+```
+
+## Kaggle Notebooks
+
+- **Bishkek v3**: https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3
+- **Dataset**: https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025
+
+## Changelog
+
+### 2026-01-10
+- Added 10 POI distance features (bazaars, parks, malls, universities, hospitals, transport, admin, premium zones)
+- Implemented Optuna hyperparameter tuning (30 trials per model)
+- Added GPU auto-detection for XGBoost/LightGBM/CatBoost
+- **Results**: MAE improved from $144 to $121.71 (-15.5%), R² from 0.66 to 0.76 (+15.2%)
