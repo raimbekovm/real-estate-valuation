@@ -260,7 +260,36 @@ class HouseKGJKScraper:
         if year_match:
             data['year_built'] = int(year_match.group(1))
 
+        # Извлекаем URL объявлений квартир на странице ЖК
+        apartment_urls = self._extract_apartment_urls(soup)
+        if apartment_urls:
+            data['apartment_urls'] = apartment_urls
+
         return data
+
+    def _extract_apartment_urls(self, soup: BeautifulSoup) -> list[str]:
+        """Извлечение URL объявлений квартир со страницы ЖК"""
+        urls = []
+
+        # Ищем все ссылки на объявления /details/...
+        detail_links = soup.find_all('a', href=re.compile(r'/details/[^?]+'))
+
+        seen = set()
+        for link in detail_links:
+            href = link.get('href', '')
+            if not href:
+                continue
+
+            # Извлекаем только путь /details/ID
+            match = re.search(r'(/details/[a-zA-Z0-9-]+)', href)
+            if match:
+                detail_path = match.group(1)
+                full_url = f"{self.BASE_URL}{detail_path}"
+                if full_url not in seen:
+                    seen.add(full_url)
+                    urls.append(full_url)
+
+        return urls
 
     def collect_all_jk_urls(self) -> list[dict]:
         """Сбор всех URL ЖК из каталога"""
@@ -343,7 +372,7 @@ class HouseKGJKScraper:
 
     def link_apartments_to_jk(self) -> int:
         """
-        Связывание квартир с ЖК по совпадению названий.
+        Связывание квартир с ЖК по URL объявлений со страницы ЖК.
 
         Returns:
             Количество связанных квартир
@@ -351,47 +380,52 @@ class HouseKGJKScraper:
         if not self.db:
             self.db = RealEstateDB(self.city)
 
-        logger.info("Связывание квартир с ЖК...")
+        logger.info("Связывание квартир с ЖК по URL...")
 
-        # Получаем все ЖК
+        # Получаем только настоящие ЖК (с ценой или slug)
         jks = self.db.conn.execute("""
-            SELECT id, name, slug, address
+            SELECT id, name, slug, url
             FROM residential_complexes
-            WHERE name IS NOT NULL
+            WHERE slug IS NOT NULL
+              AND (price_from_per_m2 IS NOT NULL OR class IS NOT NULL)
         """).fetchall()
 
         if not jks:
             logger.warning("Нет ЖК для связывания")
             return 0
 
-        logger.info(f"Найдено {len(jks)} ЖК для связывания")
+        logger.info(f"Найдено {len(jks)} настоящих ЖК для связывания")
 
         linked_count = 0
 
-        for jk_id, jk_name, jk_slug, jk_address in tqdm(jks, desc="Связывание"):
-            # Ищем квартиры с упоминанием ЖК в URL или адресе
-            # house.kg хранит ЖК в URL как /jilie-kompleksy/slug
+        for jk_id, jk_name, jk_slug, jk_url in tqdm(jks, desc="Связывание по URL"):
+            try:
+                # Загружаем страницу ЖК
+                soup = self._get_page(jk_url)
+                if not soup:
+                    continue
 
-            # Метод 1: Поиск по URL
-            result = self.db.conn.execute("""
-                UPDATE apartments
-                SET residential_complex_id = ?
-                WHERE url LIKE ?
-                AND residential_complex_id IS NULL
-            """, (jk_id, f"%/jilie-kompleksy/{jk_slug}%"))
-            linked_count += result.rowcount
+                # Извлекаем URL объявлений
+                apartment_urls = self._extract_apartment_urls(soup)
 
-            # Метод 2: Поиск по адресу (если название ЖК в адресе)
-            if jk_name:
-                # Экранируем спецсимволы для LIKE
-                safe_name = jk_name.replace('%', '\\%').replace('_', '\\_')
-                result = self.db.conn.execute("""
-                    UPDATE apartments
-                    SET residential_complex_id = ?
-                    WHERE (address LIKE ? ESCAPE '\\' OR district LIKE ? ESCAPE '\\')
-                    AND residential_complex_id IS NULL
-                """, (jk_id, f"%{safe_name}%", f"%{safe_name}%"))
-                linked_count += result.rowcount
+                if not apartment_urls:
+                    continue
+
+                # Связываем квартиры по URL
+                for apt_url in apartment_urls:
+                    result = self.db.conn.execute("""
+                        UPDATE apartments
+                        SET residential_complex_id = ?,
+                            residential_complex_name = ?
+                        WHERE url = ?
+                    """, (jk_id, jk_name, apt_url))
+                    linked_count += result.rowcount
+
+                self._delay()
+
+            except Exception as e:
+                logger.error(f"Ошибка связывания для {jk_name}: {e}")
+                continue
 
         self.db.conn.commit()
         logger.info(f"Связано {linked_count} квартир с ЖК")
@@ -401,6 +435,35 @@ class HouseKGJKScraper:
         logger.info(f"Квартир с привязкой к ЖК: {stats['apartments_with_jk']}")
 
         return linked_count
+
+    def clear_wrong_links(self) -> int:
+        """
+        Очистка неправильных связей (районы вместо ЖК).
+
+        Returns:
+            Количество очищенных связей
+        """
+        if not self.db:
+            self.db = RealEstateDB(self.city)
+
+        logger.info("Очистка неправильных связей с районами...")
+
+        # Сбрасываем связи для ЖК без цены (это районы)
+        result = self.db.conn.execute("""
+            UPDATE apartments
+            SET residential_complex_id = NULL,
+                residential_complex_name = NULL
+            WHERE residential_complex_id IN (
+                SELECT id FROM residential_complexes
+                WHERE price_from_per_m2 IS NULL AND class IS NULL
+            )
+        """)
+
+        cleared = result.rowcount
+        self.db.conn.commit()
+
+        logger.info(f"Очищено {cleared} неправильных связей")
+        return cleared
 
     def close(self):
         """Закрытие соединений"""
@@ -419,6 +482,8 @@ def main():
                         help='Начать парсинг с нуля')
     parser.add_argument('--link-only', action='store_true',
                         help='Только связать квартиры с ЖК (без парсинга)')
+    parser.add_argument('--clear-links', action='store_true',
+                        help='Очистить неправильные связи перед связыванием')
     parser.add_argument('--delay', type=float, default=2.0,
                         help='Минимальная задержка между запросами (сек)')
 
@@ -430,6 +495,9 @@ def main():
     )
 
     try:
+        if args.clear_links:
+            scraper.clear_wrong_links()
+
         if args.link_only:
             scraper.link_apartments_to_jk()
         else:
