@@ -381,7 +381,187 @@ cat_params['task_type'] = 'GPU'
 - **Bishkek v3**: https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3
 - **Dataset**: https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025
 
+---
+
+## Computer Vision (Multimodal Model)
+
+### Research Foundation
+
+Our CV approach is based on state-of-the-art research in multimodal real estate valuation:
+
+| Paper | Method | Key Finding |
+|-------|--------|-------------|
+| [MHPP (arXiv 2024)](https://arxiv.org/abs/2409.05335) | CLIP + ResNet50 | +21-26% MAE improvement |
+| [PLOS One 2025](https://pmc.ncbi.nlm.nih.gov/articles/PMC12088074/) | ResNet-101 + t-SNE | R² 0.809→0.821 (+1.5%) |
+| [NBER Study](https://www.nber.org/papers/w25174) | CNN embeddings | Images explain 11.7% of price variance |
+| [Zillow Neural Zestimate](https://www.geekwire.com/2019/zillow-launches-retooled-zestimate-uses-ai-analyze-photographs-see-value-homes/) | CNN quality detection | +20% accuracy improvement |
+
+**Key insights from literature:**
+- Property photos capture quality signals not in tabular data (granite countertops, natural light, condition)
+- Mean pooling across multiple images is robust to varying photo counts
+- PCA reduction from 2048→64 dims preserves most information
+- Simple concatenation fusion works as well as complex attention mechanisms
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MULTIMODAL PIPELINE                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐        ┌─────────────────────────────────┐    │
+│  │ 64K Photos  │───────▶│  ResNet-50 (ImageNet pretrained)│    │
+│  │ (~8/listing)│        │  Remove FC → 2048-dim embedding │    │
+│  └─────────────┘        └──────────────┬──────────────────┘    │
+│                                        │                        │
+│                         ┌──────────────▼──────────────────┐    │
+│                         │  Mean Pooling (per listing)     │    │
+│                         │  Aggregates all photos → 2048d  │    │
+│                         └──────────────┬──────────────────┘    │
+│                                        │                        │
+│                         ┌──────────────▼──────────────────┐    │
+│                         │  PCA: 2048 → 64 dimensions      │    │
+│                         │  Explained variance: ~85%       │    │
+│                         └──────────────┬──────────────────┘    │
+│                                        │                        │
+│  ┌─────────────┐                       │                        │
+│  │ 39 Tabular  │───────────────────────┼───────────────────┐   │
+│  │ Features    │                       │                   │   │
+│  └─────────────┘        ┌──────────────▼──────────────────┐│   │
+│                         │  CONCATENATE: 39 + 64 = 103 dim ││   │
+│                         └──────────────┬──────────────────┘│   │
+│                                        │◄──────────────────┘   │
+│                         ┌──────────────▼──────────────────┐    │
+│                         │     ENSEMBLE + OPTUNA           │    │
+│                         │  XGBoost + LightGBM + CatBoost  │    │
+│                         │         Ridge Meta              │    │
+│                         └─────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Image Feature Extraction
+
+```python
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+from PIL import Image
+
+class ImageFeatureExtractor:
+    """
+    Extract embeddings using pretrained ResNet-50.
+    Based on MHPP and PLOS One research.
+    """
+
+    def __init__(self, pca_components=64):
+        # Load ResNet-50, remove classification head
+        resnet = models.resnet50(weights='IMAGENET1K_V2')
+        self.model = torch.nn.Sequential(*list(resnet.children())[:-1])
+        self.model.eval()
+
+        # Standard ImageNet preprocessing
+        self.transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )
+        ])
+
+        self.pca = PCA(n_components=pca_components)
+
+    def extract_single(self, image_path):
+        """Extract 2048-dim embedding from single image"""
+        img = Image.open(image_path).convert('RGB')
+        tensor = self.transform(img).unsqueeze(0)
+
+        with torch.no_grad():
+            embedding = self.model(tensor)
+
+        return embedding.squeeze().numpy()
+
+    def extract_listing(self, image_paths):
+        """
+        Extract mean embedding for all images of a listing.
+        Mean pooling is robust to varying image counts (MHPP).
+        """
+        embeddings = [self.extract_single(p) for p in image_paths]
+        return np.mean(embeddings, axis=0)
+```
+
+### Data Requirements
+
+| Requirement | Our Dataset | Notes |
+|-------------|-------------|-------|
+| Images per listing | ~8 average | MHPP used ~5 |
+| Total images | 64,451 | Sufficient for training |
+| Image types | Interior + exterior | Kitchen, bathroom, rooms |
+| Resolution | Variable | Resized to 224×224 |
+
+### Memory Optimization
+
+Key optimizations for processing 64K images:
+
+```python
+# 1. Batch processing with cleanup
+for i, listing_id in enumerate(listing_ids):
+    embedding = extract_listing(listing_id)
+    embeddings.append(embedding)
+
+    # Clear memory every 500 listings
+    if i % 500 == 0:
+        gc.collect()
+        torch.cuda.empty_cache()
+
+# 2. Close PIL images explicitly
+img = Image.open(path).convert('RGB')
+tensor = transform(img)
+img.close()  # Prevent memory leak
+
+# 3. Use torch.no_grad() for inference
+with torch.no_grad():
+    embedding = model(tensor)
+```
+
+### Expected Results
+
+Based on research benchmarks:
+
+| Metric | Tabular Only | Multimodal | Expected Improvement |
+|--------|--------------|------------|----------------------|
+| MAE | $121.71/m² | $100-110/m² | -10% to -18% |
+| R² | 0.76 | 0.80-0.82 | +5% to +8% |
+| MedAPE | 5.49% | 4.0-4.5% | -18% to -27% |
+
+### Notebook
+
+Training notebook: `notebooks/bishkek_cv_model.py`
+
+```bash
+# Run locally
+python notebooks/bishkek_cv_model.py
+
+# Push to Kaggle
+kaggle kernels push -p notebooks/
+```
+
+### Dataset Sources
+
+- **HuggingFace**: [raimbekovm/bishkek-real-estate](https://huggingface.co/datasets/raimbekovm/bishkek-real-estate) (64K images included)
+- **Kaggle**: [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025)
+
+---
+
 ## Changelog
+
+### 2026-01-10 (CV Update)
+- Added multimodal Computer Vision pipeline based on research (MHPP, PLOS One, NBER)
+- Implemented ResNet-50 image feature extraction with mean pooling
+- Added PCA dimensionality reduction (2048→64)
+- Created `notebooks/bishkek_cv_model.py` for multimodal training
+- Memory optimization for processing 64K images
 
 ### 2026-01-10
 - Added 10 POI distance features (bazaars, parks, malls, universities, hospitals, transport, admin, premium zones)

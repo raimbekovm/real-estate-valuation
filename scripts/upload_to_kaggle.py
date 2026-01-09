@@ -53,7 +53,27 @@ def create_dataset_metadata(output_dir: Path, title: str, dataset_id: str):
     return metadata_path
 
 
-def prepare_dataset(csv_path: Path, images_dir: Path, output_dir: Path):
+def get_free_space(path: Path) -> int:
+    """Получить свободное место на диске в байтах"""
+    import shutil as sh
+    return sh.disk_usage(path).free
+
+
+def get_dir_size(path: Path) -> int:
+    """Получить размер директории в байтах (быстрый подсчёт)"""
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            if entry.is_file(follow_symlinks=False):
+                total += entry.stat().st_size
+            elif entry.is_dir(follow_symlinks=False):
+                total += get_dir_size(Path(entry.path))
+    except PermissionError:
+        pass
+    return total
+
+
+def prepare_dataset(csv_path: Path, images_dir: Path, output_dir: Path, use_symlinks: bool = True):
     """
     Подготовка датасета для загрузки на Kaggle.
 
@@ -61,11 +81,26 @@ def prepare_dataset(csv_path: Path, images_dir: Path, output_dir: Path):
         csv_path: Путь к CSV с данными
         images_dir: Папка с фотографиями (структура: {listing_id}/01.jpg)
         output_dir: Папка для подготовленного датасета
+        use_symlinks: Использовать symlinks вместо копирования (экономит ~9GB)
     """
     print(f"Подготовка датасета...")
     print(f"  CSV: {csv_path}")
     print(f"  Фото: {images_dir}")
     print(f"  Выход: {output_dir}")
+    print(f"  Режим: {'symlinks' if use_symlinks else 'копирование'}")
+
+    # Проверяем свободное место
+    free_space = get_free_space(output_dir.parent if output_dir.parent.exists() else Path.home())
+    print(f"  Свободно на диске: {free_space / 1024 / 1024 / 1024:.1f} GB")
+
+    if not use_symlinks:
+        images_size = get_dir_size(images_dir) if images_dir.exists() else 0
+        required_space = images_size * 1.1  # +10% запас
+        if free_space < required_space:
+            print(f"  ВНИМАНИЕ: Недостаточно места для копирования!")
+            print(f"  Требуется: {required_space / 1024 / 1024 / 1024:.1f} GB")
+            print(f"  Переключаюсь на режим symlinks...")
+            use_symlinks = True
 
     # Очищаем output_dir
     if output_dir.exists():
@@ -85,40 +120,102 @@ def prepare_dataset(csv_path: Path, images_dir: Path, output_dir: Path):
     df.to_csv(output_csv, index=False)
     print(f"  Сохранён: {output_csv}")
 
-    # Копируем фотографии
+    # Обрабатываем фотографии
     output_images = output_dir / "images"
     output_images.mkdir(parents=True, exist_ok=True)
+
+    linked_listings = 0
+    linked_photos = 0
 
     if images_dir.exists():
         listing_ids = df['listing_id'].dropna().unique() if 'listing_id' in df.columns else []
 
-        copied_listings = 0
-        copied_photos = 0
-
-        for listing_id in tqdm(listing_ids, desc="Копирование фото"):
+        for listing_id in tqdm(listing_ids, desc="Подготовка фото"):
             src_dir = images_dir / str(listing_id)
             if src_dir.exists() and src_dir.is_dir():
                 dst_dir = output_images / str(listing_id)
-                shutil.copytree(src_dir, dst_dir)
-                copied_listings += 1
-                copied_photos += len(list(dst_dir.glob("*.jpg")))
 
-        print(f"  Скопировано: {copied_listings} папок, {copied_photos} фото")
+                if use_symlinks:
+                    # Создаём symlink на папку (не на отдельные файлы)
+                    os.symlink(src_dir.resolve(), dst_dir)
+                    linked_listings += 1
+                    linked_photos += len(list(src_dir.glob("*.jpg")))
+                else:
+                    # Копируем (старый способ)
+                    shutil.copytree(src_dir, dst_dir)
+                    linked_listings += 1
+                    linked_photos += len(list(dst_dir.glob("*.jpg")))
+
+        action = "Слинковано" if use_symlinks else "Скопировано"
+        print(f"  {action}: {linked_listings} папок, {linked_photos} фото")
     else:
         print(f"  Папка с фото не найдена: {images_dir}")
 
     # Создаём metadata
     create_dataset_metadata(output_dir, KAGGLE_TITLE, KAGGLE_DATASET)
 
-    # Статистика
-    total_size = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file())
-    print(f"\nГотово! Размер датасета: {total_size / 1024 / 1024:.1f} MB")
+    # Статистика (для symlinks показываем реальный размер данных)
+    if use_symlinks:
+        csv_size = output_csv.stat().st_size
+        images_size = get_dir_size(images_dir) if images_dir.exists() else 0
+        total_size = csv_size + images_size
+        print(f"\nГотово! Размер датасета: {total_size / 1024 / 1024 / 1024:.2f} GB (symlinks → реальные данные)")
+    else:
+        total_size = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file())
+        print(f"\nГотово! Размер датасета: {total_size / 1024 / 1024:.1f} MB")
 
     return output_dir
 
 
+def create_tar_with_symlinks(dataset_dir: Path, output_tar: Path):
+    """
+    Создание tar архива с разыменованием symlinks.
+    Использует tar -h (--dereference) для следования за symlinks.
+    """
+    import tarfile
+
+    print(f"  Создание tar архива (следуя за symlinks)...")
+    print(f"  Это может занять несколько минут...")
+
+    # Подсчитаем общий размер для прогресса
+    total_files = sum(1 for _ in dataset_dir.rglob("*") if _.is_file() or _.is_symlink())
+
+    with tarfile.open(output_tar, "w") as tar:
+        processed = 0
+        for item in dataset_dir.rglob("*"):
+            if item.is_file() or item.is_symlink():
+                # Относительный путь внутри архива
+                arcname = item.relative_to(dataset_dir)
+
+                # Если это symlink - добавляем реальный файл
+                if item.is_symlink():
+                    real_path = item.resolve()
+                    if real_path.exists():
+                        if real_path.is_dir():
+                            # Symlink на директорию - добавляем все файлы из неё
+                            for sub_item in real_path.rglob("*"):
+                                if sub_item.is_file():
+                                    sub_arcname = item.relative_to(dataset_dir) / sub_item.relative_to(real_path)
+                                    tar.add(sub_item, arcname=sub_arcname)
+                                    processed += 1
+                        else:
+                            tar.add(real_path, arcname=arcname)
+                            processed += 1
+                else:
+                    tar.add(item, arcname=arcname)
+                    processed += 1
+
+                # Прогресс каждые 1000 файлов
+                if processed % 1000 == 0:
+                    print(f"    Обработано: {processed} файлов...")
+
+    tar_size = output_tar.stat().st_size / 1024 / 1024 / 1024
+    print(f"  Создан: {output_tar.name} ({tar_size:.2f} GB)")
+    return output_tar
+
+
 def upload_to_kaggle(dataset_dir: Path, message: str = None):
-    """Загрузка датасета на Kaggle"""
+    """Загрузка датасета на Kaggle (поддерживает symlinks)"""
     if message is None:
         message = f"Update {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
@@ -133,22 +230,92 @@ def upload_to_kaggle(dataset_dir: Path, message: str = None):
         print("Ошибка: kaggle CLI не установлен. Установите: pip install kaggle")
         return False
 
-    # Загружаем новую версию датасета
-    cmd = [
-        "kaggle", "datasets", "version",
-        "-p", str(dataset_dir),
-        "-m", message,
-        "--dir-mode", "zip"
-    ]
+    # Проверяем есть ли symlinks
+    has_symlinks = any(p.is_symlink() for p in dataset_dir.rglob("*"))
+
+    if has_symlinks:
+        print("  Обнаружены symlinks, создаю tar архив вручную...")
+
+        # Проверяем свободное место
+        free_space = get_free_space(dataset_dir)
+        images_dir = dataset_dir / "images"
+
+        # Оцениваем размер реальных данных
+        estimated_size = 0
+        for item in images_dir.rglob("*"):
+            if item.is_symlink():
+                real_path = item.resolve()
+                if real_path.exists() and real_path.is_dir():
+                    estimated_size += get_dir_size(real_path)
+            elif item.is_file():
+                estimated_size += item.stat().st_size
+
+        print(f"  Свободно на диске: {free_space / 1024 / 1024 / 1024:.1f} GB")
+        print(f"  Оценочный размер данных: {estimated_size / 1024 / 1024 / 1024:.1f} GB")
+
+        if free_space < estimated_size * 1.1:
+            print(f"\n  ОШИБКА: Недостаточно места для создания архива!")
+            print(f"  Требуется минимум {estimated_size * 1.1 / 1024 / 1024 / 1024:.1f} GB")
+            print(f"  Освободите место или используйте --no-symlinks с достаточным местом")
+            return False
+
+        # Создаём tar архив
+        tar_path = dataset_dir / "dataset.tar.gz"
+        try:
+            create_tar_with_symlinks(dataset_dir, tar_path)
+        except Exception as e:
+            print(f"  Ошибка создания архива: {e}")
+            return False
+
+        # Удаляем symlinks и оставляем только tar + metadata
+        print("  Подготовка к загрузке...")
+        images_dir = dataset_dir / "images"
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+
+        # Загружаем
+        cmd = [
+            "kaggle", "datasets", "version",
+            "-p", str(dataset_dir),
+            "-m", message,
+        ]
+    else:
+        # Нет symlinks - используем стандартный подход
+        free_space = get_free_space(dataset_dir)
+        print(f"  Свободно на диске: {free_space / 1024 / 1024 / 1024:.1f} GB")
+
+        cmd = [
+            "kaggle", "datasets", "version",
+            "-p", str(dataset_dir),
+            "-m", message,
+            "--dir-mode", "zip"
+        ]
+
+    print(f"  Выполняю: {' '.join(cmd)}")
+    print("  Это может занять несколько минут...")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            print("Успешно загружено!")
+        # Запускаем с выводом в реальном времени
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        # Выводим прогресс
+        for line in process.stdout:
+            print(f"  {line.rstrip()}")
+
+        process.wait()
+
+        if process.returncode == 0:
+            print("\nУспешно загружено!")
             print(f"URL: https://www.kaggle.com/datasets/{KAGGLE_DATASET}")
             return True
         else:
-            print(f"Ошибка загрузки: {result.stderr}")
+            print(f"\nОшибка загрузки (код {process.returncode})")
             return False
     except Exception as e:
         print(f"Ошибка: {e}")
@@ -183,8 +350,8 @@ def scrape_and_upload(max_pages: int = None, city: str = 'bishkek'):
         print("Ошибка: нет данных для загрузки")
         return False
 
-    # Подготовка и загрузка
-    prepare_dataset(Path(csv_path), images_dir, output_dir)
+    # Подготовка и загрузка (symlinks для экономии места)
+    prepare_dataset(Path(csv_path), images_dir, output_dir, use_symlinks=True)
 
     photo_count = sum(1 for _ in images_dir.rglob("*.jpg")) if images_dir.exists() else 0
     message = f"Update: {len(scraper.data)} listings, {photo_count} photos"
@@ -212,6 +379,8 @@ def main():
                         help="Сообщение для версии датасета")
     parser.add_argument("--prepare-only", action="store_true",
                         help="Только подготовить, не загружать")
+    parser.add_argument("--no-symlinks", action="store_true",
+                        help="Копировать файлы вместо symlinks (требует много места)")
 
     args = parser.parse_args()
 
@@ -235,8 +404,9 @@ def main():
         else:
             images_dir = project_root / "data" / "images" / args.city
 
-        # Подготовка
-        prepare_dataset(csv_path, images_dir, output_dir)
+        # Подготовка (symlinks по умолчанию)
+        use_symlinks = not args.no_symlinks
+        prepare_dataset(csv_path, images_dir, output_dir, use_symlinks=use_symlinks)
 
         # Загрузка
         if not args.prepare_only:
