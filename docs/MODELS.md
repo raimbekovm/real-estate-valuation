@@ -525,45 +525,97 @@ with torch.no_grad():
     embedding = model(tensor)
 ```
 
-### Expected Results
+### CV Experiment Results (2026-01-11)
 
-Based on research benchmarks:
+We conducted an experiment to test whether adding image features improves price prediction.
 
-| Metric | Tabular Only | Multimodal | Expected Improvement |
-|--------|--------------|------------|----------------------|
-| MAE | $121.71/m² | $100-110/m² | -10% to -18% |
-| R² | 0.76 | 0.80-0.82 | +5% to +8% |
-| MedAPE | 5.49% | 4.0-4.5% | -18% to -27% |
+#### Experiment Setup
 
-### Notebook
+| Parameter | Value |
+|-----------|-------|
+| Dataset | 8,727 apartments (after outlier removal) |
+| Train/Test Split | 80/20 random split (6,981 / 1,746) |
+| Listings with images | Train: 6,246/6,981 (89.5%), Test: 1,565/1,746 (89.6%) |
+| Image model | ResNet-50 (ImageNet pretrained) |
+| Embedding dimension | 2048 → 64 (PCA) |
+| PCA explained variance | 81.36% |
+| Total features | 103 (39 tabular + 64 image) |
+| Optuna trials | 30 per model |
+| Hardware | Kaggle GPU (Tesla T4) |
 
-Training notebook: `notebooks/bishkek_cv_model.py`
+#### Results Comparison
 
-```bash
-# Run locally
-python notebooks/bishkek_cv_model.py
+| Model | v3 Tabular Only | v3 + CV (Multimodal) | Difference |
+|-------|-----------------|----------------------|------------|
+| **Features** | 39 | 103 (+64 image) | +164% |
+| **XGBoost** | $122.72 | $126.06 | +$3.34 (worse) |
+| **LightGBM** | $125.39 | $128.70 | +$3.31 (worse) |
+| **CatBoost** | $128.59 | $130.89 | +$2.30 (worse) |
+| **Ensemble MAE** | **$121.71** | $125.28 | **+$3.57 (worse)** |
+| **Ensemble R²** | **0.760** | 0.7468 | **-0.013 (worse)** |
+| **MedAPE** | **5.49%** | 5.76% | **+0.27% (worse)** |
 
-# Push to Kaggle
-kaggle kernels push -p notebooks/
-```
+#### Why CV Did Not Help
+
+1. **Image Quality Issues**
+   - Photos on market.kz are user-uploaded, not professional
+   - Many photos are low quality, blurry, or poorly lit
+   - Some listings have irrelevant photos (building exterior, floor plans, neighborhood)
+
+2. **Weak Price-Image Correlation**
+   - Unlike US markets (Zillow, Redfin), Bishkek apartment photos don't strongly correlate with price
+   - Similar-looking apartments can have very different prices based on location
+   - Tabular features (district, floor, area) already capture most price variance
+
+3. **Curse of Dimensionality**
+   - Adding 64 image features to 39 tabular features (103 total)
+   - With only 7,000 training samples, model may overfit
+   - Optuna found worse hyperparameters for the larger feature space
+
+4. **Information Loss in PCA**
+   - PCA retained only 81% of variance (lost 19%)
+   - Important visual signals may have been compressed out
+
+#### Conclusion
+
+For the Bishkek real estate market, **tabular features alone are sufficient**. Computer Vision does not add predictive value because:
+- Photo quality is inconsistent
+- Visual appearance doesn't correlate with price as strongly as in Western markets
+- Location and apartment characteristics (captured in tabular data) dominate price prediction
+
+**Recommendation:** Use v3 tabular model ($121.71 MAE, 0.76 R²) as the production model.
+
+#### Notebooks
+
+| Notebook | Description | Link |
+|----------|-------------|------|
+| v3 (Best) | Tabular only, 39 features | [Kaggle](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-price-prediction-v3) |
+| v3 + CV | Multimodal experiment | [Kaggle](https://www.kaggle.com/code/muraraimbekov/bishkek-v3-computer-vision) |
 
 ### Dataset Sources
 
 - **HuggingFace**: [raimbekovm/bishkek-real-estate](https://huggingface.co/datasets/raimbekovm/bishkek-real-estate) (64K images included)
-- **Kaggle**: [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025)
+- **Kaggle Tabular**: [bishkek-real-estate-2025](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-2025)
+- **Kaggle Images**: [bishkek-real-estate-images](https://www.kaggle.com/datasets/muraraimbekov/bishkek-real-estate-images) (9.6 GB, 64K photos)
 
 ---
 
 ## Changelog
 
-### 2026-01-10 (CV Update)
+### 2026-01-11 (CV Experiment)
+- Conducted multimodal experiment: v3 + ResNet-50 image embeddings
+- **Result: CV did not improve model** (MAE $125.28 vs $121.71 baseline)
+- Documented findings and analysis in MODELS.md
+- Conclusion: Tabular features sufficient for Bishkek market
+
+### 2026-01-10 (CV Pipeline)
 - Added multimodal Computer Vision pipeline based on research (MHPP, PLOS One, NBER)
 - Implemented ResNet-50 image feature extraction with mean pooling
 - Added PCA dimensionality reduction (2048→64)
 - Created `notebooks/bishkek_cv_model.py` for multimodal training
-- Memory optimization for processing 64K images
+- Uploaded 64K images to Kaggle (9.6 GB in 4 parts)
 
-### 2026-01-10
+### 2026-01-10 (v3 Release)
 - Added 10 POI distance features (bazaars, parks, malls, universities, hospitals, transport, admin, premium zones)
 - Implemented Optuna hyperparameter tuning (30 trials per model)
 - Added GPU auto-detection for XGBoost/LightGBM/CatBoost
