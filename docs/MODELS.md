@@ -600,7 +600,89 @@ For the Bishkek real estate market, **tabular features alone are sufficient**. C
 
 ---
 
+## Road Network Features Experiment (2026-01-11)
+
+### Hypothesis
+
+Testing whether road network data from OpenStreetMap can improve price prediction:
+
+1. **Accessibility Hypothesis**: Proximity to main roads → better transport → higher prices
+2. **Noise Hypothesis**: Too close to main roads → noise pollution → lower prices
+3. **Optimal Distance Theory**: Non-linear relationship, optimal at 100-400m from main roads
+4. **Road Density**: Higher density = better infrastructure → higher prices
+
+### Road Features Implemented
+
+| Feature | Description |
+|---------|-------------|
+| `dist_to_main_road` | Distance to nearest primary/trunk road (km) |
+| `dist_to_primary` | Distance to primary roads |
+| `dist_to_secondary` | Distance to secondary roads |
+| `dist_to_trunk` | Distance to trunk/highway roads |
+| `road_density_500m` | Count of road points within 500m |
+| `main_road_density_1km` | Main road points within 1km |
+| `optimal_zone` | Binary: 100-400m from main road |
+| `noise_zone` | Binary: <50m from main road |
+| `road_hierarchy_score` | Weighted accessibility score |
+
+### Road Feature Correlations
+
+| Feature | Correlation with Price |
+|---------|----------------------|
+| main_road_density_1km | **+0.209** |
+| road_density_500m | +0.095 |
+| road_hierarchy_score | +0.089 |
+| optimal_zone | +0.088 |
+| dist_to_main_road | -0.051 |
+| dist_to_primary | -0.052 |
+| dist_to_secondary | -0.049 |
+| dist_to_trunk | -0.033 |
+| noise_zone | -0.017 |
+
+### Zone Analysis
+
+| Zone | Mean Price | vs Outside |
+|------|------------|------------|
+| Optimal (100-400m from main road) | $1,604/m² | **+$65/m²** |
+| Noise (<50m from main road) | $1,543/m² | **-$31/m²** |
+
+### Ablation Study Results
+
+| Model | MAE | R² |
+|-------|-----|-----|
+| **Without road features (28 features)** | **$122.39/m²** | **0.7516** |
+| With road features (36 features) | $124.33/m² | 0.7452 |
+| **Difference** | **+$1.94/m² (worse)** | **-0.0063 (worse)** |
+
+### Why Road Features Did Not Help
+
+1. **Weak correlations** - Maximum correlation only 0.21 (main_road_density_1km)
+2. **POI features overlap** - dist_to_center, dist_to_bazaars already capture location quality
+3. **District encoding** - Target encoding of districts already captures infrastructure level
+4. **Bishkek specifics** - City is relatively small, road access is not a differentiator
+
+### Conclusion
+
+Road network features **do not improve** the model for Bishkek. The existing POI and location features already capture the relevant geographic information. Adding 8 road features actually slightly degraded performance.
+
+**Recommendation:** Do not include road features in production model.
+
+### Resources
+
+- **Notebook**: [Kaggle - Road Features Experiment](https://www.kaggle.com/code/muraraimbekov/bishkek-real-estate-v3-road-features)
+- **Roads Dataset**: [Kaggle - Bishkek Roads](https://www.kaggle.com/datasets/muraraimbekov/bishkek-roads)
+- **Source**: OpenStreetMap via Geofabrik (22,653 road segments)
+
+---
+
 ## Changelog
+
+### 2026-01-11 (Road Features Experiment)
+- Tested road network features from OpenStreetMap (22,653 road segments)
+- Implemented 8 road features: distances, density, optimal/noise zones
+- **Result: Road features did not improve model** (MAE $124.33 vs $122.39 baseline)
+- Uploaded roads dataset to Kaggle: [bishkek-roads](https://www.kaggle.com/datasets/muraraimbekov/bishkek-roads)
+- Conclusion: POI features already capture location quality
 
 ### 2026-01-11 (CV Experiment)
 - Conducted multimodal experiment: v3 + ResNet-50 image embeddings
